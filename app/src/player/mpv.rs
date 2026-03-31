@@ -186,11 +186,19 @@ impl MpvPlayer {
         mpv.set_property("volume", 100.0_f64).ok();
         mpv.set_property("keep-open", "yes").ok();
         mpv.set_property("ytdl", true).ok();
-        // When running inside a snap, point mpv to the bundled yt-dlp binary
-        // explicitly so it doesn't search PATH (which may not include $SNAP/usr/bin).
-        if let Ok(snap) = std::env::var("SNAP") {
-            let ytdl_path = format!("{}/usr/bin/yt-dlp", snap);
-            let opts = format!("ytdl_hook-ytdl_path={}", ytdl_path);
+        // Point mpv to the bundled yt-dlp binary when running inside a sandbox
+        // where PATH may not include the binary's location.
+        let ytdl_path = if let Ok(snap) = std::env::var("SNAP") {
+            // Snap: yt-dlp lives under $SNAP/usr/bin
+            Some(format!("{}/usr/bin/yt-dlp", snap))
+        } else if std::env::var("FLATPAK_ID").is_ok() {
+            // Flatpak: yt-dlp is bundled at /app/bin/yt-dlp
+            Some("/app/bin/yt-dlp".to_string())
+        } else {
+            None
+        };
+        if let Some(path) = ytdl_path {
+            let opts = format!("ytdl_hook-ytdl_path={}", path);
             mpv.set_property("script-opts", opts.as_str()).ok();
         }
 
