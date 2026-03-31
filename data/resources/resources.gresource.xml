@@ -4,6 +4,9 @@
     <file alias="style.css">style.css</file>
     <!-- App icon -->
     <file>icons/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg</file>
+    <!-- Brand logos for feedback dialog -->
+    <file>icons/scalable/apps/discord-logo.svg</file>
+    <file>icons/scalable/apps/github-logo.svg</file>
     <!-- Bundled UI icons (ensure they work on any distro/theme) -->
     <file>icons/scalable/actions/document-edit-symbolic.svg</file>
     <file>icons/scalable/actions/document-open-recent-symbolic.svg</file>

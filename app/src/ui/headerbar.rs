@@ -282,15 +282,13 @@ impl MediaHeaderBar {
             btn.add_controller(mc);
         }
 
-        // Report Issue → open GitHub issues page in the default browser
+        // Report Issue → open feedback dialog
         {
             let fp = file_popover.downgrade();
-            report_issue_btn.connect_clicked(move |_| {
+            report_issue_btn.connect_clicked(move |btn| {
                 if let Some(f) = fp.upgrade() { f.popdown(); }
-                gio::AppInfo::launch_default_for_uri(
-                    "https://github.com/daniacosta-dev/aurora-media-player/issues",
-                    gio::AppLaunchContext::NONE,
-                ).ok();
+                let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
+                show_report_dialog(&parent);
             });
         }
 
@@ -745,6 +743,144 @@ fn adw_scheme(key: &str) -> adw::ColorScheme {
         "dark"  => adw::ColorScheme::ForceDark,
         _       => adw::ColorScheme::Default,
     }
+}
+
+// ── Report / Feedback dialog ──────────────────────────────────────────────────
+
+fn show_report_dialog(parent: &gtk::Window) {
+    let dialog = adw::Window::builder()
+        .title(t("Send Feedback"))
+        .transient_for(parent)
+        .modal(true)
+        .default_width(420)
+        .resizable(false)
+        .build();
+    dialog.set_widget_name("report-dialog");
+
+    let header = adw::HeaderBar::new();
+
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(28)
+        .margin_start(24)
+        .margin_end(24)
+        .halign(gtk::Align::Center)
+        .build();
+
+    let title_lbl = gtk::Label::builder()
+        .label(t("Help us improve Aurora"))
+        .css_classes(["title-2"])
+        .wrap(true)
+        .justify(gtk::Justification::Center)
+        .halign(gtk::Align::Center)
+        .margin_bottom(4)
+        .build();
+
+    let desc_lbl = gtk::Label::builder()
+        .label(t("We want Aurora Media Player to be the best it can be. Your feedback and bug reports are incredibly valuable — share your thoughts on Discord or open an issue on GitHub."))
+        .wrap(true)
+        .justify(gtk::Justification::Center)
+        .halign(gtk::Align::Center)
+        .css_classes(["dim-label"])
+        .margin_bottom(12)
+        .build();
+    desc_lbl.set_max_width_chars(48);
+
+    let btn_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(16)
+        .halign(gtk::Align::Center)
+        .build();
+
+    // ── Discord button ────────────────────────────────────────────────────
+    let discord_btn = gtk::Button::builder()
+        .css_classes(["flat"])
+        .build();
+    discord_btn.set_cursor_from_name(Some("pointer"));
+    let discord_inner = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(14)
+        .margin_bottom(14)
+        .margin_start(24)
+        .margin_end(24)
+        .halign(gtk::Align::Center)
+        .build();
+    let discord_img = gtk::Image::builder()
+        .resource("/io/github/daniacosta_dev/AuroraMediaPlayer/icons/scalable/apps/discord-logo.svg")
+        .pixel_size(48)
+        .build();
+    let discord_lbl = gtk::Label::builder()
+        .label("Discord")
+        .css_classes(["heading"])
+        .build();
+    discord_inner.append(&discord_img);
+    discord_inner.append(&discord_lbl);
+    discord_btn.set_child(Some(&discord_inner));
+    {
+        let d = dialog.downgrade();
+        discord_btn.connect_clicked(move |_| {
+            if let Some(dlg) = d.upgrade() { dlg.close(); }
+            gio::AppInfo::launch_default_for_uri(
+                "https://discord.gg/E6NQVFAY",
+                gio::AppLaunchContext::NONE,
+            ).ok();
+        });
+    }
+
+    // ── GitHub Issues button ──────────────────────────────────────────────
+    let github_btn = gtk::Button::builder()
+        .css_classes(["flat"])
+        .build();
+    github_btn.set_cursor_from_name(Some("pointer"));
+    let github_inner = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(14)
+        .margin_bottom(14)
+        .margin_start(24)
+        .margin_end(24)
+        .halign(gtk::Align::Center)
+        .build();
+    let github_img = gtk::Image::builder()
+        .resource("/io/github/daniacosta_dev/AuroraMediaPlayer/icons/scalable/apps/github-logo.svg")
+        .pixel_size(48)
+        .build();
+    let github_lbl = gtk::Label::builder()
+        .label(t("GitHub Issues"))
+        .css_classes(["heading"])
+        .build();
+    github_inner.append(&github_img);
+    github_inner.append(&github_lbl);
+    github_btn.set_child(Some(&github_inner));
+    {
+        let d = dialog.downgrade();
+        github_btn.connect_clicked(move |_| {
+            if let Some(dlg) = d.upgrade() { dlg.close(); }
+            gio::AppInfo::launch_default_for_uri(
+                "https://github.com/daniacosta-dev/aurora-media-player/issues",
+                gio::AppLaunchContext::NONE,
+            ).ok();
+        });
+    }
+
+    btn_box.append(&discord_btn);
+    btn_box.append(&github_btn);
+
+    body.append(&title_lbl);
+    body.append(&desc_lbl);
+    body.append(&btn_box);
+
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    root.append(&header);
+    root.append(&body);
+
+    dialog.set_content(Some(&root));
+    dialog.present();
 }
 
 // ── Settings dialog ───────────────────────────────────────────────────────────
