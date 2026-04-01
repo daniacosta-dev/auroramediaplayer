@@ -615,7 +615,6 @@ impl PlayerControls {
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(4)
                 .halign(gtk::Align::Start)
-                .hexpand(true)
                 .build();
             left_box.append(&self.repeat_btn);
             left_box.append(&self.shuffle_btn);
@@ -626,7 +625,6 @@ impl PlayerControls {
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(4)
                 .halign(gtk::Align::Center)
-                .hexpand(true)
                 .build();
             center_btns.append(&self.prev_btn);
             center_btns.append(&self.play_btn);
@@ -643,15 +641,16 @@ impl PlayerControls {
             vol_box.append(&self.vol_slider);
             vol_box.append(&self.vol_label);
 
-            let end_row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
+            // CenterBox guarantees the play controls are always centred
+            // regardless of the widths of the left and right groups.
+            let end_row = gtk::CenterBox::builder()
                 .margin_start(12)
                 .margin_end(12)
                 .margin_bottom(4)
                 .build();
-            end_row.append(&left_box);
-            end_row.append(&center_btns);
-            end_row.append(&vol_box);
+            end_row.set_start_widget(Some(&left_box));
+            end_row.set_center_widget(Some(&center_btns));
+            end_row.set_end_widget(Some(&vol_box));
 
             self.root.append(&self.hover_label);
             self.root.append(&self.seek_outer);
