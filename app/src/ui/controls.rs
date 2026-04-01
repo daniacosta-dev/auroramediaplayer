@@ -1,14 +1,19 @@
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popover, DrawingArea, Overlay};
+#[allow(unused_imports)]
+use std::path::PathBuf;
 use gtk4::prelude::*;
 use glib;
+use gio;
 
 use crate::i18n::t;
 use crate::state::SharedState;
 use crate::player::PlayerCommand;
 use crate::player::RepeatMode;
+use crate::thumbnails::SharedCache;
 
 pub struct PlayerControls {
     root: Box,
@@ -37,6 +42,13 @@ pub struct PlayerControls {
     seek_outer: Overlay,
     hover_label: Label,
     vol_label: Label,
+    /// Picture widget added as overlay on video_controls (floats above the controls bar).
+    thumb_picture: gtk::Picture,
+    /// Shared cache written by the background ffmpeg thread.
+    thumb_cache: Rc<RefCell<SharedCache>>,
+    /// Reference to the video overlay for coordinate translation.
+    /// Set after construction via `set_video_overlay()`.
+    video_overlay_target: Rc<RefCell<Option<gtk::Overlay>>>,
 }
 
 impl PlayerControls {
@@ -87,6 +99,26 @@ impl PlayerControls {
         seek_outer.set_child(Some(&seek_bar));
         seek_outer.add_overlay(&chapter_overlay);
 
+        // ── Thumbnail preview ─────────────────────────────────────────────
+        // Added as an overlay on video_controls (window.rs) so it floats
+        // above the controls bar without affecting its height.
+        let thumb_picture = gtk::Picture::builder()
+            .width_request(160)
+            .height_request(90)
+            .can_shrink(false)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::End)
+            .opacity(0.0)
+            .can_target(false)
+            .css_classes(["seek-thumb-picture"])
+            .build();
+
+        let thumb_cache: Rc<RefCell<SharedCache>> =
+            Rc::new(RefCell::new(Arc::new(Mutex::new(None))));
+
+        let video_overlay_target: Rc<RefCell<Option<gtk::Overlay>>> =
+            Rc::new(RefCell::new(None));
+
         // ── Hover time label ──────────────────────────────────────────────
         // Sits in the root Box ABOVE the seek bar so it never overlaps the
         // trough. opacity=0/1 is used instead of visible so layout is stable.
@@ -97,10 +129,16 @@ impl PlayerControls {
             .build();
 
         {
-            let data_c = chapter_data.clone();
-            let lbl_w  = hover_label.downgrade();
-            let sb_w   = seek_bar.downgrade();
-            let mc     = gtk::EventControllerMotion::new();
+            let data_c   = chapter_data.clone();
+            let lbl_w    = hover_label.downgrade();
+            let sb_w     = seek_bar.downgrade();
+            let root_ref = root.downgrade();
+            let pic_w    = thumb_picture.downgrade();
+            let cache_c  = thumb_cache.clone();
+            let vot_c    = video_overlay_target.clone();
+            // Cache the last frame path to skip redundant set_file calls.
+            let last_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+            let mc = gtk::EventControllerMotion::new();
 
             mc.connect_enter({
                 let lbl = hover_label.downgrade();
@@ -108,7 +146,11 @@ impl PlayerControls {
             });
             mc.connect_leave({
                 let lbl = hover_label.downgrade();
-                move |_| { if let Some(l) = lbl.upgrade() { l.set_opacity(0.0); } }
+                let pic = thumb_picture.downgrade();
+                move |_| {
+                    if let Some(l) = lbl.upgrade() { l.set_opacity(0.0); }
+                    if let Some(p) = pic.upgrade() { p.set_opacity(0.0); }
+                }
             });
             mc.connect_motion(move |_, x, _| {
                 let (Some(l), Some(sb)) = (lbl_w.upgrade(), sb_w.upgrade()) else { return };
@@ -130,9 +172,58 @@ impl PlayerControls {
                     Some(name) => format!("{name}\n{time_str}"),
                     None       => time_str,
                 });
-                let lbl_half = (l.width() as f64 / 2.0).max(24.0);
-                let margin = (x - lbl_half).max(0.0).min(w - lbl_half * 2.0) as i32;
-                l.set_margin_start(margin);
+
+                // Translate cursor x to video_controls space once; reuse for
+                // both the label and the thumbnail so they share the same
+                // physical center point over the cursor.
+                let (vx, _lvy_label) = if let Some(ref vc) = *vot_c.borrow() {
+                    sb.translate_coordinates(vc, x, 0.0).unwrap_or((x, 0.0))
+                } else {
+                    (x, 0.0)
+                };
+
+                // ── Hover label: center on cursor in root-Box space ──────────
+                if let Some(root) = root_ref.upgrade() {
+                    let (rx, _) = sb.translate_coordinates(&root, x, 0.0)
+                        .unwrap_or((x, 0.0));
+                    let root_w  = root.width() as f64;
+                    let lbl_half = (l.width() as f64 / 2.0).max(24.0);
+                    let margin = (rx - lbl_half).max(0.0).min(root_w - lbl_half * 2.0) as i32;
+                    l.set_margin_start(margin);
+                }
+
+                // ── Thumbnail preview ────────────────────────────────────────
+                if let Some(pic) = pic_w.upgrade() {
+                    let cache_guard = cache_c.borrow();
+                    let has_thumb = if let Ok(lock) = cache_guard.lock() {
+                        if let Some(ref tc) = *lock {
+                            if let Some(path) = tc.frame_at(frac) {
+                                // Only reload the file when the frame changes.
+                                let changed = last_path.borrow().as_deref() != Some(path);
+                                if changed {
+                                    pic.set_file(Some(&gio::File::for_path(path)));
+                                    *last_path.borrow_mut() = Some(path.to_owned());
+                                }
+                                if let Some(ref vc) = *vot_c.borrow() {
+                                    // Center thumbnail on cursor in vc space.
+                                    let ms = (vx - 80.0).max(0.0)
+                                        .min((vc.width() as f64 - 160.0).max(0.0))
+                                        as i32;
+                                    // Anchor above the hover label top edge.
+                                    let (_, lvy) = l.translate_coordinates(vc, 0.0, 0.0)
+                                        .unwrap_or((0.0, 0.0));
+                                    let mb = (vc.height() as f64 - lvy + 4.0).max(0.0) as i32;
+                                    pic.set_margin_start(ms);
+                                    pic.set_margin_bottom(mb);
+                                }
+                                pic.set_opacity(1.0);
+                                true
+                            } else { false }
+                        } else { false }
+                    } else { false };
+
+                    if !has_thumb { pic.set_opacity(0.0); }
+                }
             });
             seek_bar.add_controller(mc);
         }
@@ -453,6 +544,9 @@ impl PlayerControls {
             seek_outer,
             hover_label,
             vol_label,
+            thumb_picture,
+            thumb_cache,
+            video_overlay_target,
         };
         this.apply_layout(false);
         this
@@ -568,6 +662,25 @@ impl PlayerControls {
 
     pub fn widget(&self) -> &Box {
         &self.root
+    }
+
+    /// Replace the active thumbnail cache (called from window.rs when a new
+    /// local file is loaded or when the player goes idle).
+    pub fn set_thumb_cache(&self, cache: SharedCache) {
+        self.thumb_picture.set_opacity(0.0);
+        *self.thumb_cache.borrow_mut() = cache;
+    }
+
+    /// Returns the thumbnail picture widget to be added as an overlay on
+    /// video_controls in window.rs.
+    pub fn thumb_widget(&self) -> &gtk::Picture {
+        &self.thumb_picture
+    }
+
+    /// Tell the motion handler which overlay to use for coordinate translation.
+    /// Must be called after video_controls is created (window.rs).
+    pub fn set_video_overlay(&self, overlay: &gtk::Overlay) {
+        *self.video_overlay_target.borrow_mut() = Some(overlay.clone());
     }
 
     pub fn relabel(&self) {

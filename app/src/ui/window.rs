@@ -367,6 +367,10 @@ impl MediaWindow {
             video_controls.set_clip_overlay(&controls_revealer, true);
         }
 
+        // Thumbnail overlay added AFTER controls_revealer so it renders on top.
+        video_controls.add_overlay(controls.thumb_widget());
+        controls.set_video_overlay(&video_controls);
+
         // ── Resizable paned layout ────────────────────────────────────────
         // gtk::Paned provides native smooth drag-resize without custom gesture
         // callbacks, avoiding the GLArea/mpv glitch that appears when using
@@ -1055,12 +1059,15 @@ impl MediaWindow {
         let settings_save_cooldown = Rc::new(Cell::new(0u32));
         let snapshot_200 = snapshot.clone();
         let fallback_icon_uri = aurora_icon_uri();
+        // Track the last file+duration key for which thumbnails were generated
+        // to avoid re-running ffmpeg every 200 ms for the same file.
+        let last_thumb_key: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let _tick_start = std::time::Instant::now();
             // Read mpv properties from the background-thread snapshot — no blocking IPC.
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, thumbnail, eof, buffering, seeking) = {
+                 artist, album, thumbnail, eof, buffering, seeking, snap_path) = {
                 let snap = match snapshot_200.lock() {
                     Ok(g) => g.clone(),
                     Err(_) => return glib::ControlFlow::Continue,
@@ -1083,7 +1090,8 @@ impl MediaWindow {
                  snap.title, snap.idle, snap.has_video,
                  artist, snap.album.unwrap_or_default(),
                  thumbnail,
-                 snap.eof, snap.buffering, snap.seeking)
+                 snap.eof, snap.buffering, snap.seeking,
+                 snap.path)
             };
             // Read Rust-side state (no mpv IPC — always fast).
             let (pending_seek, repeat_mode, shuffle, podcast_mode, has_prev, has_next) = {
@@ -1217,6 +1225,40 @@ impl MediaWindow {
             }
 
             controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode, has_prev, has_next);
+
+            // ── Seek-bar thumbnail strip ────────────────────────────────
+            // Track every path change (local or URL) so switching to a URL
+            // clears any thumbnails left over from the previous local file.
+            {
+                let new_key = if !idle && dur > 1.0 {
+                    snap_path.as_deref().map(|p| p.to_owned()).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
+                if *last_thumb_key.borrow() != new_key {
+                    *last_thumb_key.borrow_mut() = new_key.clone();
+
+                    let is_local = !new_key.is_empty()
+                        && !new_key.starts_with("http://")
+                        && !new_key.starts_with("https://");
+
+                    if is_local {
+                        let new_cache = std::sync::Arc::new(std::sync::Mutex::new(None));
+                        controls_c.set_thumb_cache(new_cache.clone());
+                        crate::thumbnails::generate_async(
+                            std::path::PathBuf::from(&new_key),
+                            dur,
+                            new_cache,
+                        );
+                    } else {
+                        // URL or idle: clear any stale thumbnails.
+                        controls_c.set_thumb_cache(
+                            std::sync::Arc::new(std::sync::Mutex::new(None))
+                        );
+                    }
+                }
+            }
 
             // ── Header title / subtitle ─────────────────────────────────
             {
