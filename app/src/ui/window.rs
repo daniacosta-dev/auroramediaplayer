@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
-use adw::{ApplicationWindow, Toast, ToastOverlay, ToolbarView, OverlaySplitView, Breakpoint, BreakpointCondition};
+use adw::{ApplicationWindow, Toast, ToastOverlay, ToolbarView, Breakpoint, BreakpointCondition};
 use gtk4::{self as gtk};
 use glib;
 use gio;
@@ -297,7 +297,9 @@ impl MediaWindow {
             .default_width(960)
             .default_height(if fixed_mode { 695 } else { 600 })
             .build();
-        window.set_size_request(480, min_height);
+        // 580px: minimum for the floating controls bar to render without overflow.
+        // The playlist sidebar adds its own minimum (200px) on top when visible.
+        window.set_size_request(580, min_height);
 
         // ── UI components ─────────────────────────────────────────────────
         // toast_overlay is created early so the screenshot callback can reference it.
@@ -343,6 +345,8 @@ impl MediaWindow {
             .transition_duration(220)
             .reveal_child(true)
             .valign(gtk::Align::End)
+            .hexpand(true)
+            .halign(gtk::Align::Fill)
             .build();
 
         let video_controls = gtk::Overlay::builder()
@@ -350,6 +354,8 @@ impl MediaWindow {
             .hexpand(true)
             .vexpand(true)
             .height_request(120)
+            // Minimum width so the floating controls bar never gets clipped by the playlist.
+            .width_request(580)
             .build();
 
         // Initial floating setup: controls inside revealer, overlaid on video.
@@ -361,13 +367,54 @@ impl MediaWindow {
             video_controls.set_clip_overlay(&controls_revealer, true);
         }
 
-        let split_view = OverlaySplitView::builder()
-            .sidebar(playlist.widget())
-            .content(&video_controls)
-            .sidebar_position(gtk::PackType::End)
-            .sidebar_width_fraction(0.28)
-            .show_sidebar(false)
+        // ── Resizable paned layout ────────────────────────────────────────
+        // gtk::Paned provides native smooth drag-resize without custom gesture
+        // callbacks, avoiding the GLArea/mpv glitch that appears when using
+        // OverlaySplitView + set_sidebar_width_fraction on every mouse-move.
+        //
+        // resize_start_child=true  → video grows/shrinks with the window
+        // resize_end_child=false   → playlist keeps its pixel width on window resize
+        let paned = gtk::Paned::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .resize_start_child(true)
+            .resize_end_child(false)
+            .shrink_start_child(false)
+            .shrink_end_child(false)
+            .hexpand(true)
+            .vexpand(true)
             .build();
+        const MIN_SIDEBAR_PX: i32 = 200;
+
+        paned.set_start_child(Some(&video_controls));
+        paned.set_end_child(Some(playlist.widget()));
+        // Enforce sidebar minimum so GTK Paned computes window minimum correctly:
+        // when playlist is visible → min window width = 460 (video) + 200 (sidebar).
+        // When hidden, only video_controls (460px) contributes → window can be narrower.
+        playlist.widget().set_size_request(MIN_SIDEBAR_PX, -1);
+        // Playlist starts hidden; toggle button is inactive by default.
+        playlist.widget().set_visible(false);
+
+        // Preferred sidebar width in pixels — updated when user drags the handle.
+        let sidebar_px: Rc<Cell<i32>> = Rc::new(Cell::new(320));
+        // Max sidebar = 40% of window width, capped at 600px for ultra-wide screens.
+        let max_sidebar = |w: i32| -> i32 { (w * 40 / 100).min(600) };
+
+        // Enforce min/max sidebar width when the user drags the Paned handle.
+        paned.connect_position_notify({
+            let win_w = window.downgrade();
+            move |paned| {
+                let Some(win) = win_w.upgrade() else { return };
+                let w = win.width();
+                if w <= 0 { return }
+                let max_px  = (w * 40 / 100).min(600);
+                let sidebar_w = w - paned.position();
+                if sidebar_w > max_px {
+                    paned.set_position(w - max_px);
+                } else if sidebar_w < MIN_SIDEBAR_PX {
+                    paned.set_position(w - MIN_SIDEBAR_PX);
+                }
+            }
+        });
 
         // Always use a VBox outer container so we can append controls below in fixed mode.
         let outer_box = gtk::Box::builder()
@@ -497,7 +544,7 @@ impl MediaWindow {
         let push_recent = header.push_recent_fn.clone();
 
         let toolbar_view = ToolbarView::builder()
-            .content(&split_view)
+            .content(&paned)
             .build();
         toolbar_view.set_vexpand(true);
         toolbar_view.add_top_bar(header.widget());
@@ -513,11 +560,39 @@ impl MediaWindow {
         window.set_content(Some(&toast_overlay));
 
         // ── Playlist toggle ───────────────────────────────────────────────
-        header
-            .playlist_btn
-            .bind_property("active", &split_view, "show-sidebar")
-            .sync_create()
-            .build();
+        {
+            let paned_w    = paned.downgrade();
+            let playlist_w = playlist.widget().downgrade();
+            let window_w   = window.downgrade();
+            let px         = sidebar_px.clone();
+            header.playlist_btn.connect_toggled(move |btn| {
+                let Some(paned)    = paned_w.upgrade()    else { return };
+                let Some(playlist) = playlist_w.upgrade() else { return };
+                if btn.is_active() {
+                    playlist.set_visible(true);
+                    let w = paned.width();
+                    if w > 0 {
+                        paned.set_position((w - px.get()).max(w - max_sidebar(w)).max(0));
+                    }
+                    // Enforce wider minimum so video area + sidebar both fit.
+                    if let Some(win) = window_w.upgrade() {
+                        win.set_size_request(580 + MIN_SIDEBAR_PX, min_height);
+                    }
+                } else {
+                    // Persist current sidebar width before hiding.
+                    let w   = paned.width();
+                    let pos = paned.position();
+                    if w > 0 && pos > 0 && pos < w {
+                        px.set((w - pos).clamp(MIN_SIDEBAR_PX, max_sidebar(w)));
+                    }
+                    playlist.set_visible(false);
+                    // Restore narrower minimum when playlist is closed.
+                    if let Some(win) = window_w.upgrade() {
+                        win.set_size_request(580, min_height);
+                    }
+                }
+            });
+        }
 
 
         // ── Sync maximize button ↔ fullscreen ────────────────────────────
@@ -534,9 +609,15 @@ impl MediaWindow {
             });
         }
 
-        // ── Breakpoint: collapse sidebar on narrow windows ────────────────
+        // ── Breakpoint: hide playlist on narrow windows ───────────────────
+        // On windows narrower than 720sp the sidebar would be too cramped;
+        // hide the toggle button and force the playlist off.
         let bp = Breakpoint::new(BreakpointCondition::parse("max-width: 720sp").unwrap());
-        bp.add_setter(&split_view, "collapsed", &true.to_value());
+        bp.add_setter(&header.playlist_btn, "visible", &false.to_value());
+        bp.connect_apply({
+            let btn = header.playlist_btn.downgrade();
+            move |_| { if let Some(b) = btn.upgrade() { b.set_active(false); } }
+        });
         window.add_breakpoint(bp);
 
         // ── Drag & drop ───────────────────────────────────────────────────
@@ -833,7 +914,7 @@ impl MediaWindow {
             let last_pos_c = last_cursor_pos.clone();
             let toolbar_view_c = toolbar_view.downgrade();
             let controls_revealer_c = controls_revealer.downgrade();
-            let split_view_c = split_view.downgrade();
+            let playlist_widget_c = playlist.widget().downgrade();
             let playlist_btn_c = header.playlist_btn.downgrade();
             let window_c = window.downgrade();
             let motion_ctrl = gtk::EventControllerMotion::new();
@@ -850,10 +931,8 @@ impl MediaWindow {
                 if let Some(r) = controls_revealer_c.upgrade() {
                     r.set_reveal_child(true);
                 }
-                if let Some(sv) = split_view_c.upgrade() {
-                    if let Some(btn) = playlist_btn_c.upgrade() {
-                        sv.set_show_sidebar(btn.is_active());
-                    }
+                if let (Some(pw), Some(btn)) = (playlist_widget_c.upgrade(), playlist_btn_c.upgrade()) {
+                    pw.set_visible(btn.is_active());
                 }
                 if let Some(win) = window_c.upgrade() {
                     win.set_cursor(None::<&gdk4::Cursor>);
@@ -945,7 +1024,7 @@ impl MediaWindow {
         let controls_revealer_weak = controls_revealer.downgrade();
         let is_fixed_mode_c = is_fixed_mode.clone();
         let mouse_over_controls_c = mouse_over_controls.clone();
-        let split_view_weak = split_view.downgrade();
+        let playlist_widget_weak = playlist.widget().downgrade();
         let playlist_btn_weak = header.playlist_btn.downgrade();
         let state_c = state.clone();
         let controls_c = controls.clone();
@@ -1287,8 +1366,8 @@ impl MediaWindow {
                                 r.set_reveal_child(false);
                             }
                         }
-                        if let Some(sv) = split_view_weak.upgrade() {
-                            sv.set_show_sidebar(false);
+                        if let Some(pw) = playlist_widget_weak.upgrade() {
+                            pw.set_visible(false);
                         }
                         win.set_cursor(
                             gdk4::Cursor::from_name("none", None::<&gdk4::Cursor>).as_ref(),
@@ -1309,10 +1388,8 @@ impl MediaWindow {
                             if let Some(r) = controls_revealer_weak.upgrade() {
                                 r.set_reveal_child(true);
                             }
-                            if let Some(sv) = split_view_weak.upgrade() {
-                                if let Some(btn) = playlist_btn_weak.upgrade() {
-                                    sv.set_show_sidebar(btn.is_active());
-                                }
+                            if let (Some(pw), Some(btn)) = (playlist_widget_weak.upgrade(), playlist_btn_weak.upgrade()) {
+                                pw.set_visible(btn.is_active());
                             }
                         }
                     }

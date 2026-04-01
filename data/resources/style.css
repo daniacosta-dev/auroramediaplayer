@@ -159,6 +159,16 @@ label.playlist-duration {
 }
 
 
+/* ── Playlist resize handle ──────────────────────────────────────────────────── */
+.playlist-resize-handle {
+    min-width: 6px;
+    background: transparent;
+    transition: background-color 150ms ease;
+}
+.playlist-resize-handle:hover {
+    background-color: alpha(@accent_color, 0.30);
+}
+
 /* ── Buffering spinner backdrop ─────────────────────────────────────────────── */
 .buffering-backdrop {
     background-color: rgba(0, 0, 0, 0.55);
