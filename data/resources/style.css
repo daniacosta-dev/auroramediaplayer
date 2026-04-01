@@ -69,6 +69,53 @@ button.file-menu-item image {
     color: white;
 }
 
+/* ── Playlist panel — modern mode ───────────────────────────────────────────── */
+/* Overlaid on the video. Left-edge gradient blends into the video seamlessly.  */
+/* margin-bottom clears the controls bar (~76px).                               */
+.playlist-panel-modern {
+    margin-bottom: 76px;
+}
+
+/* Left-edge fade blends into the video. */
+.playlist-panel-modern toolbarview {
+    background-image: linear-gradient(to right, alpha(black, 0) 0%, alpha(black, 0.72) 12px);
+}
+
+.playlist-panel-modern toolbarview > scrolledwindow {
+    background-color: transparent;
+}
+
+/* Header bar blends with the panel — no distinct chrome */
+.playlist-panel-modern headerbar {
+    background-color: transparent;
+    border-bottom: 1px solid alpha(white, 0.06);
+    box-shadow: none;
+}
+
+.playlist-panel-modern headerbar label,
+.playlist-panel-modern label,
+.playlist-panel-modern button {
+    color: white;
+}
+
+.playlist-panel-modern .playlist-list > row:hover {
+    background-color: alpha(white, 0.07);
+}
+
+.playlist-panel-modern .playlist-list > row:selected {
+    background-color: alpha(@accent_color, 0.28);
+    color: white;
+    box-shadow: none;
+}
+
+.playlist-panel-modern .playlist-list > row:selected .track-number {
+    color: @accent_color;
+}
+
+.playlist-panel-modern .playlist-list > row:selected label.playlist-title {
+    color: white;
+}
+
 /* ── Headerbar — unify with sidebar/controls chrome ─────────────────────────── */
 /* In dark mode @headerbar_bg_color differs from @sidebar_bg_color, causing a
    mismatch with the controls bar and playlist panel.  Override the headerbar
