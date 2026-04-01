@@ -1316,6 +1316,12 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .group(&btn_floating)
         .valign(gtk::Align::Center)
         .build();
+    let btn_modern = gtk::ToggleButton::builder()
+        .label(t("Modern"))
+        .active(saved_ui_mode == "modern")
+        .group(&btn_floating)
+        .valign(gtk::Align::Center)
+        .build();
 
     let layout_btns = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -1326,6 +1332,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .build();
     layout_btns.append(&btn_floating);
     layout_btns.append(&btn_fixed);
+    layout_btns.append(&btn_modern);
 
     layout_row.add_suffix(&layout_btns);
     layout_list.append(&layout_row);
@@ -1514,6 +1521,15 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
             if btn.is_active() {
                 let mut s = load_app_settings(); s.ui_mode = Some("fixed".into()); save_app_settings(&s);
                 cb("fixed");
+            }
+        }
+    });
+    btn_modern.connect_toggled({
+        let cb = on_ui_mode_change.clone();
+        move |btn| {
+            if btn.is_active() {
+                let mut s = load_app_settings(); s.ui_mode = Some("modern".into()); save_app_settings(&s);
+                cb("modern");
             }
         }
     });

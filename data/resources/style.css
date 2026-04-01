@@ -49,6 +49,26 @@ button.file-menu-item image {
     background-color: @headerbar_bg_color;
 }
 
+/* ── Controls bar — modern mode ─────────────────────────────────────────────── */
+/* Transparent gradient overlay — no card chrome. */
+.controls-bar-modern {
+    margin: 0;
+    padding: 0 0 10px;
+    border-radius: 0;
+    box-shadow: none;
+    border: none;
+    background-color: transparent;
+    background-image: linear-gradient(to top, alpha(black, 0.72), alpha(black, 0));
+}
+
+/* Force white icons/text in modern mode — the dark gradient background makes
+   system-themed elements unreadable in light mode. */
+.controls-bar-modern,
+.controls-bar-modern button,
+.controls-bar-modern label {
+    color: white;
+}
+
 /* ── Headerbar — unify with sidebar/controls chrome ─────────────────────────── */
 /* In dark mode @headerbar_bg_color differs from @sidebar_bg_color, causing a
    mismatch with the controls bar and playlist panel.  Override the headerbar

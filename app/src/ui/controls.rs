@@ -573,16 +573,16 @@ impl PlayerControls {
             video_overlay_target,
             is_fixed,
         };
-        this.apply_layout(false);
+        this.apply_layout("floating");
         this
     }
 
-    pub fn apply_layout(&self, fixed: bool) {
-        self.is_fixed.set(fixed);
+    pub fn apply_layout(&self, mode: &str) {
+        self.is_fixed.set(mode == "fixed");
         while let Some(child) = self.root.first_child() {
             self.root.remove(&child);
         }
-        if fixed {
+        if mode == "fixed" {
             let seek_row = gtk::Box::builder()
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(8)
@@ -616,6 +616,50 @@ impl PlayerControls {
             btn_row.append(&self.podcast_btn);
             let sp2 = gtk::Box::builder().hexpand(true).build();
             btn_row.append(&sp2);
+            btn_row.append(&self.tracks_btn);
+            btn_row.append(&self.speed_btn);
+            btn_row.append(&self.vol_btn);
+            btn_row.append(&self.vol_slider);
+            btn_row.append(&self.vol_label);
+            btn_row.append(&self.fullscreen_btn);
+
+            self.root.append(&self.hover_label);
+            self.root.append(&seek_row);
+            self.root.append(&btn_row);
+        } else if mode == "modern" {
+            // Modern: gradient overlay, seek bar flanked by times, single button row below
+            self.seek_outer.set_hexpand(true);
+            self.elapsed.set_valign(gtk::Align::Center);
+            self.remaining.set_valign(gtk::Align::Center);
+
+            let seek_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .margin_start(12)
+                .margin_end(12)
+                .margin_top(4)
+                .margin_bottom(2)
+                .build();
+            seek_row.append(&self.elapsed);
+            seek_row.append(&self.seek_outer);
+            seek_row.append(&self.remaining);
+
+            let btn_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(2)
+                .margin_start(8)
+                .margin_end(8)
+                .margin_bottom(4)
+                .build();
+            btn_row.append(&self.prev_btn);
+            btn_row.append(&self.play_btn);
+            btn_row.append(&self.next_btn);
+            let sp = gtk::Box::builder().hexpand(true).build();
+            btn_row.append(&sp);
+            btn_row.append(&self.repeat_btn);
+            btn_row.append(&self.shuffle_btn);
+            btn_row.append(&self.podcast_btn);
+            btn_row.append(&self.screenshot_btn);
             btn_row.append(&self.tracks_btn);
             btn_row.append(&self.speed_btn);
             btn_row.append(&self.vol_btn);

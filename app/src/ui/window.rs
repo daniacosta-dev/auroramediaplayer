@@ -262,15 +262,17 @@ impl MediaWindow {
         let state = PlayerState::create();
 
         // ── Restore global volume/mute from settings ──────────────────────
-        let fixed_mode = {
+        let initial_mode: String = {
             let settings = super::headerbar::load_app_settings();
             if let Some(p) = state.borrow().player.as_ref() {
                 p.execute(PlayerCommand::SetVolume(settings.volume)).ok();
                 p.execute(PlayerCommand::Mute(settings.muted)).ok();
             }
             state.borrow_mut().muted = settings.muted;
-            settings.ui_mode.as_deref() == Some("fixed")
+            settings.ui_mode.unwrap_or_else(|| "floating".into())
         };
+        let fixed_mode = initial_mode == "fixed";
+        let current_mode: Rc<RefCell<String>> = Rc::new(RefCell::new(initial_mode.clone()));
 
         // ── Background mpv snapshot thread ────────────────────────────────
         // Reads all commonly-polled mpv properties on a dedicated thread so
@@ -333,11 +335,10 @@ impl MediaWindow {
                 });
             }
         }));
-        controls.apply_layout(fixed_mode);
+        controls.apply_layout(&initial_mode);
 
         // ── Layout ────────────────────────────────────────────────────────
         // (fixed_mode already determined above, before window creation)
-        let is_fixed_mode: Rc<Cell<bool>> = Rc::new(Cell::new(fixed_mode));
 
         // Always create the revealer; in fixed mode it starts detached from the tree.
         let controls_revealer = gtk::Revealer::builder()
@@ -358,8 +359,8 @@ impl MediaWindow {
             .width_request(580)
             .build();
 
-        // Initial floating setup: controls inside revealer, overlaid on video.
-        if !fixed_mode {
+        // Initial floating/modern setup: controls inside revealer, overlaid on video.
+        if initial_mode != "fixed" {
             controls.widget().set_valign(gtk::Align::End);
             controls_revealer.set_child(Some(controls.widget()));
             video_controls.add_overlay(&controls_revealer);
@@ -427,39 +428,52 @@ impl MediaWindow {
             .vexpand(true)
             .build();
 
-        // Initial fixed setup: controls below the toolbar_view, with flat CSS.
-        if fixed_mode {
-            controls.widget().add_css_class("controls-bar-fixed");
+        // Initial mode CSS setup.
+        match initial_mode.as_str() {
+            "fixed"  => controls.widget().add_css_class("controls-bar-fixed"),
+            "modern" => controls.widget().add_css_class("controls-bar-modern"),
+            _        => {}
         }
 
         // ── Dynamic mode switching callback ─────────────────────────────────
         let controls_for_layout = controls.clone();
         let on_ui_mode_change: Rc<dyn Fn(&str)> = {
-            let is_fixed_mode = is_fixed_mode.clone();
+            let current_mode   = current_mode.clone();
             let controls_revealer = controls_revealer.clone();
             let video_controls = video_controls.clone();
-            let outer_box = outer_box.clone();
+            let outer_box      = outer_box.clone();
             let controls_widget = controls.widget().clone();
             Rc::new(move |mode: &str| {
+                let prev = current_mode.borrow().clone();
+                if mode == prev { return; }
+                let was_fixed = prev == "fixed";
                 let now_fixed = mode == "fixed";
-                if now_fixed == is_fixed_mode.get() { return; }
-                is_fixed_mode.set(now_fixed);
-                controls_for_layout.apply_layout(now_fixed);
-                if now_fixed {
-                    // Floating → Fixed: unparent from revealer, add to outer_box
+                *current_mode.borrow_mut() = mode.to_string();
+
+                controls_for_layout.apply_layout(mode);
+
+                // Clear all mode CSS classes before re-applying.
+                controls_widget.remove_css_class("controls-bar-fixed");
+                controls_widget.remove_css_class("controls-bar-modern");
+
+                if now_fixed && !was_fixed {
+                    // Overlay (floating/modern) → Fixed
                     controls_revealer.set_child(None::<&gtk::Widget>);
                     video_controls.remove_overlay(&controls_revealer);
                     controls_widget.add_css_class("controls-bar-fixed");
                     outer_box.append(&controls_widget);
-                } else {
-                    // Fixed → Floating: unparent from outer_box, put back in revealer
+                } else if !now_fixed && was_fixed {
+                    // Fixed → Overlay (floating/modern)
                     outer_box.remove(&controls_widget);
-                    controls_widget.remove_css_class("controls-bar-fixed");
+                    if mode == "modern" { controls_widget.add_css_class("controls-bar-modern"); }
                     controls_widget.set_valign(gtk::Align::End);
                     controls_revealer.set_child(Some(&controls_widget));
                     controls_revealer.set_reveal_child(true);
                     video_controls.add_overlay(&controls_revealer);
                     video_controls.set_clip_overlay(&controls_revealer, true);
+                } else {
+                    // Both overlay modes (floating ↔ modern): widget stays in revealer, just update CSS.
+                    if mode == "modern" { controls_widget.add_css_class("controls-bar-modern"); }
                 }
             })
         };
@@ -1099,7 +1113,7 @@ impl MediaWindow {
         let window_weak = window.downgrade();
         let toolbar_view_weak = toolbar_view.downgrade();
         let controls_revealer_weak = controls_revealer.downgrade();
-        let is_fixed_mode_c = is_fixed_mode.clone();
+        let is_fixed_mode_c = current_mode.clone();
         let mouse_over_controls_c = mouse_over_controls.clone();
         let playlist_widget_weak = playlist.widget().downgrade();
         let playlist_btn_weak = header.playlist_btn.downgrade();
@@ -1476,7 +1490,7 @@ impl MediaWindow {
                         if let Some(tv) = toolbar_view_weak.upgrade() {
                             tv.set_reveal_top_bars(false);
                         }
-                        if !is_fixed_mode_c.get() {
+                        if *is_fixed_mode_c.borrow() != "fixed" {
                             if let Some(r) = controls_revealer_weak.upgrade() {
                                 r.set_reveal_child(false);
                             }
@@ -1494,7 +1508,7 @@ impl MediaWindow {
                     if let Some(tv) = toolbar_view_weak.upgrade() {
                         tv.set_reveal_top_bars(true);
                     }
-                    if !is_fixed_mode_c.get() {
+                    if *is_fixed_mode_c.borrow() != "fixed" {
                         if idle_secs > hide_after && !idle && !popover_open {
                             if let Some(r) = controls_revealer_weak.upgrade() {
                                 r.set_reveal_child(false);

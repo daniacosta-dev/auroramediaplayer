@@ -90,6 +90,7 @@ fn es(key: &'static str) -> Option<&'static str> {
         "Control bar style"           => "Estilo de barra",
         "Floating"                    => "Flotante",
         "Fixed"                       => "Fija",
+        "Modern"                      => "Moderno",
         "Language"                    => "Idioma",
         "English"                     => "Inglés",
         "Spanish"                     => "Español",
