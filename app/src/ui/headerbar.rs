@@ -137,6 +137,7 @@ pub struct MediaHeaderBar {
     recent_row_lbl: gtk::Label,
     screenshot_folder_lbl: gtk::Label,
     report_issue_lbl: gtk::Label,
+    quit_lbl: gtk::Label,
 }
 
 impl MediaHeaderBar {
@@ -229,6 +230,8 @@ impl MediaHeaderBar {
         let (screenshot_folder_btn, screenshot_folder_lbl) = mk_item("camera-photo-symbolic", t("Open Pictures Folder"));
         let (report_issue_btn, report_issue_lbl)           = mk_item("help-about-symbolic",     t("Report Issue"));
         report_issue_btn.set_cursor_from_name(Some("pointer"));
+        let (quit_btn, quit_lbl) = mk_item("application-exit-symbolic", t("Close"));
+        quit_btn.set_cursor_from_name(Some("pointer"));
 
         menu_box.append(&open_file_btn);
         menu_box.append(&open_url_btn);
@@ -240,6 +243,8 @@ impl MediaHeaderBar {
         menu_box.append(&screenshot_folder_btn);
         menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         menu_box.append(&report_issue_btn);
+        menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        menu_box.append(&quit_btn);
 
         // ── Recent sub-popover ─────────────────────────────────────────────────
         // Parented to recent_row_btn (inside file_popover) so autohide on the
@@ -272,8 +277,19 @@ impl MediaHeaderBar {
             recent_row_btn.add_controller(mc);
         }
 
+        // Quit → close the window
+        {
+            let fp = file_popover.downgrade();
+            quit_btn.connect_clicked(move |btn| {
+                if let Some(f) = fp.upgrade() { f.popdown(); }
+                if let Some(win) = btn.root().and_downcast::<gtk::Window>() {
+                    win.close();
+                }
+            });
+        }
+
         // Hover any other item → close sub
-        for btn in [&open_file_btn, &open_url_btn, &open_sub_btn, &screenshot_folder_btn, &report_issue_btn] {
+        for btn in [&open_file_btn, &open_url_btn, &open_sub_btn, &screenshot_folder_btn, &report_issue_btn, &quit_btn] {
             let rs = recent_sub.downgrade();
             let mc = gtk::EventControllerMotion::new();
             mc.connect_enter(move |_, _, _| {
@@ -624,7 +640,7 @@ impl MediaHeaderBar {
             header, playlist_btn, push_recent_fn, window_title,
             open_file_btn, open_url_btn, open_sub_btn, settings_btn,
             file_btn, open_file_lbl, open_url_lbl, open_sub_lbl,
-            recent_row_lbl, screenshot_folder_lbl, report_issue_lbl,
+            recent_row_lbl, screenshot_folder_lbl, report_issue_lbl, quit_lbl,
         }
     }
 
@@ -640,6 +656,7 @@ impl MediaHeaderBar {
         self.recent_row_lbl.set_label(t("Recent Files"));
         self.screenshot_folder_lbl.set_label(t("Open Pictures Folder"));
         self.report_issue_lbl.set_label(t("Report Issue"));
+        self.quit_lbl.set_label(t("Close"));
         self.playlist_btn.set_tooltip_text(Some(t("Toggle playlist")));
         self.settings_btn.set_tooltip_text(Some(t("Settings")));
     }

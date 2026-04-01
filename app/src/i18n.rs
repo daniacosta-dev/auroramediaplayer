@@ -112,6 +112,7 @@ fn es(key: &'static str) -> Option<&'static str> {
         "No recent files"             => "Sin archivos recientes",
         "Open Screenshot Folder"      => "Abrir carpeta de capturas",
         "Report Issue"                => "Reportar problema",
+        "Close"                       => "Cerrar",
         "Remove from recents"         => "Quitar de recientes",
         "Open Media File"             => "Abrir archivo multimedia",
         "Open Subtitle File"          => "Abrir archivo de subtítulos",

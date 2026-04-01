@@ -613,6 +613,79 @@ impl MediaWindow {
             });
         }
 
+        // ── Fullscreen button ─────────────────────────────────────────────
+        {
+            let window_c = window.downgrade();
+            controls.fullscreen_btn().connect_clicked(move |_| {
+                if let Some(win) = window_c.upgrade() {
+                    if win.property::<bool>("fullscreened") {
+                        win.unfullscreen();
+                        win.unmaximize();
+                    } else {
+                        win.maximize();
+                        win.fullscreen();
+                    }
+                }
+            });
+        }
+        // Update fullscreen button icon when fullscreen state changes.
+        {
+            let controls_c = controls.clone();
+            window.connect_notify_local(Some("fullscreened"), move |win, _| {
+                let is_fs = win.property::<bool>("fullscreened");
+                controls_c.fullscreen_btn().set_icon_name(if is_fs {
+                    "view-restore-symbolic"
+                } else {
+                    "view-fullscreen-symbolic"
+                });
+            });
+        }
+        // Fix revealer width after exiting fullscreen.
+        //
+        // GTK's Revealer caches its child allocation when a transition ends.
+        // After unfullscreen the overlay is correctly sized to the window but
+        // the revealer's cached child allocation still holds the fullscreen
+        // width. A queue_resize() once the window width has stabilised forces
+        // a fresh measure/allocate pass that clears the stale cache.
+        //
+        // We poll window.width() every frame until it's stable for two
+        // consecutive ticks — that's the earliest point the compositor has
+        // committed the new size and GTK has applied it.
+        {
+            let revealer_w = controls_revealer.downgrade();
+            let win_w      = window.downgrade();
+
+            window.connect_notify_local(Some("fullscreened"), move |_, _| {
+                let Some(win) = win_w.upgrade() else { return };
+                if win.property::<bool>("fullscreened") { return; }
+
+                let r      = revealer_w.clone();
+                let ww     = win_w.clone();
+                let prev_w = Rc::new(Cell::new(-1i32));
+                let ticks  = Rc::new(Cell::new(0u32));
+
+                glib::timeout_add_local(Duration::from_millis(16), move || {
+                    let t = ticks.get() + 1;
+                    ticks.set(t);
+                    if t > 125 { return glib::ControlFlow::Break; } // 2 s safety
+
+                    let Some(win) = ww.upgrade() else { return glib::ControlFlow::Break; };
+                    let w = win.width();
+                    let pw = prev_w.get();
+                    prev_w.set(w);
+
+                    if w > 0 && w == pw {
+                        // Width stable for two consecutive frames — safe to re-measure.
+                        if let Some(rev) = r.upgrade() {
+                            rev.queue_resize();
+                        }
+                        return glib::ControlFlow::Break;
+                    }
+                    glib::ControlFlow::Continue
+                });
+            });
+        }
+
         // ── Breakpoint: hide playlist on narrow windows ───────────────────
         // On windows narrower than 720sp the sidebar would be too cramped;
         // hide the toggle button and force the playlist off.
