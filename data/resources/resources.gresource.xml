@@ -8,6 +8,7 @@
     <file>icons/scalable/apps/discord-logo.svg</file>
     <file>icons/scalable/apps/github-logo.svg</file>
     <!-- Bundled UI icons (ensure they work on any distro/theme) -->
+    <file>icons/scalable/actions/application-exit-symbolic.svg</file>
     <file>icons/scalable/actions/document-edit-symbolic.svg</file>
     <file>icons/scalable/actions/document-open-recent-symbolic.svg</file>
     <file>icons/scalable/actions/document-open-symbolic.svg</file>
@@ -23,7 +24,9 @@
     <file>icons/scalable/actions/media-skip-backward-symbolic.svg</file>
     <file>icons/scalable/actions/media-skip-forward-symbolic.svg</file>
     <file>icons/scalable/actions/media-view-subtitles-symbolic.svg</file>
+    <file>icons/scalable/actions/view-fullscreen-symbolic.svg</file>
     <file>icons/scalable/actions/view-list-symbolic.svg</file>
+    <file>icons/scalable/actions/view-restore-symbolic.svg</file>
     <file>icons/scalable/categories/preferences-system-symbolic.svg</file>
     <file>icons/scalable/devices/audio-headphones-symbolic.svg</file>
     <file>icons/scalable/devices/camera-photo-symbolic.svg</file>

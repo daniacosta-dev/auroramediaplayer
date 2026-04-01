@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
 use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popover, DrawingArea, Overlay};
@@ -31,6 +31,7 @@ pub struct PlayerControls {
     seek_handler: glib::SignalHandlerId,
     vol_handler: glib::SignalHandlerId,
     screenshot_btn: Button,
+    fullscreen_btn: Button,
     speed_btn: Button,
     tracks_btn: Button,
     podcast_btn: Button,
@@ -49,6 +50,10 @@ pub struct PlayerControls {
     /// Reference to the video overlay for coordinate translation.
     /// Set after construction via `set_video_overlay()`.
     video_overlay_target: Rc<RefCell<Option<gtk::Overlay>>>,
+    /// Tracks the current layout mode so the thumbnail motion handler can
+    /// compute the correct margin_bottom (fixed: controls are below the video,
+    /// so thumbnail should pin to the bottom edge of the video overlay).
+    is_fixed: Rc<Cell<bool>>,
 }
 
 impl PlayerControls {
@@ -119,6 +124,8 @@ impl PlayerControls {
         let video_overlay_target: Rc<RefCell<Option<gtk::Overlay>>> =
             Rc::new(RefCell::new(None));
 
+        let is_fixed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
         // ── Hover time label ──────────────────────────────────────────────
         // Sits in the root Box ABOVE the seek bar so it never overlaps the
         // trough. opacity=0/1 is used instead of visible so layout is stable.
@@ -136,6 +143,7 @@ impl PlayerControls {
             let pic_w    = thumb_picture.downgrade();
             let cache_c  = thumb_cache.clone();
             let vot_c    = video_overlay_target.clone();
+            let is_fixed_c = is_fixed.clone();
             // Cache the last frame path to skip redundant set_file calls.
             let last_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
             let mc = gtk::EventControllerMotion::new();
@@ -209,10 +217,17 @@ impl PlayerControls {
                                     let ms = (vx - 80.0).max(0.0)
                                         .min((vc.width() as f64 - 160.0).max(0.0))
                                         as i32;
-                                    // Anchor above the hover label top edge.
-                                    let (_, lvy) = l.translate_coordinates(vc, 0.0, 0.0)
-                                        .unwrap_or((0.0, 0.0));
-                                    let mb = (vc.height() as f64 - lvy + 4.0).max(0.0) as i32;
+                                    // In fixed mode the controls bar sits below the video
+                                    // overlay, so pin the thumbnail to the bottom edge of
+                                    // the video. In floating mode anchor above the hover
+                                    // label (which is overlaid on the video area).
+                                    let mb = if is_fixed_c.get() {
+                                        4
+                                    } else {
+                                        let (_, lvy) = l.translate_coordinates(vc, 0.0, 0.0)
+                                            .unwrap_or((0.0, 0.0));
+                                        (vc.height() as f64 - lvy + 4.0).max(0.0) as i32
+                                    };
                                     pic.set_margin_start(ms);
                                     pic.set_margin_bottom(mb);
                                 }
@@ -295,6 +310,13 @@ impl PlayerControls {
             .css_classes(vec!["flat"])
             .build();
 
+        // ── Fullscreen button ─────────────────────────────────────────────
+        let fullscreen_btn = Button::builder()
+            .icon_name("view-fullscreen-symbolic")
+            .tooltip_text(t("Fullscreen"))
+            .css_classes(vec!["flat"])
+            .build();
+
         // ── Tracks button + popover ───────────────────────────────────────
         let tracks_btn = Button::builder()
             .icon_name("media-optical-symbolic")
@@ -362,6 +384,7 @@ impl PlayerControls {
             podcast_btn.upcast_ref(),
             vol_btn.upcast_ref(),
             screenshot_btn.upcast_ref(),
+            fullscreen_btn.upcast_ref(),
             speed_btn.upcast_ref(),
             tracks_btn.upcast_ref(),
             seek_bar.upcast_ref(),
@@ -533,6 +556,7 @@ impl PlayerControls {
             seek_handler,
             vol_handler,
             screenshot_btn,
+            fullscreen_btn,
             speed_btn,
             tracks_btn,
             podcast_btn,
@@ -547,12 +571,14 @@ impl PlayerControls {
             thumb_picture,
             thumb_cache,
             video_overlay_target,
+            is_fixed,
         };
         this.apply_layout(false);
         this
     }
 
     pub fn apply_layout(&self, fixed: bool) {
+        self.is_fixed.set(fixed);
         while let Some(child) = self.root.first_child() {
             self.root.remove(&child);
         }
@@ -595,7 +621,9 @@ impl PlayerControls {
             btn_row.append(&self.vol_btn);
             btn_row.append(&self.vol_slider);
             btn_row.append(&self.vol_label);
+            btn_row.append(&self.fullscreen_btn);
 
+            self.root.append(&self.hover_label);
             self.root.append(&seek_row);
             self.root.append(&btn_row);
         } else {
@@ -615,7 +643,6 @@ impl PlayerControls {
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(4)
                 .halign(gtk::Align::Start)
-                .hexpand(true)
                 .build();
             left_box.append(&self.repeat_btn);
             left_box.append(&self.shuffle_btn);
@@ -626,7 +653,6 @@ impl PlayerControls {
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(4)
                 .halign(gtk::Align::Center)
-                .hexpand(true)
                 .build();
             center_btns.append(&self.prev_btn);
             center_btns.append(&self.play_btn);
@@ -642,16 +668,18 @@ impl PlayerControls {
             vol_box.append(&self.vol_btn);
             vol_box.append(&self.vol_slider);
             vol_box.append(&self.vol_label);
+            vol_box.append(&self.fullscreen_btn);
 
-            let end_row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
+            // CenterBox guarantees the play controls are always centred
+            // regardless of the widths of the left and right groups.
+            let end_row = gtk::CenterBox::builder()
                 .margin_start(12)
                 .margin_end(12)
                 .margin_bottom(4)
                 .build();
-            end_row.append(&left_box);
-            end_row.append(&center_btns);
-            end_row.append(&vol_box);
+            end_row.set_start_widget(Some(&left_box));
+            end_row.set_center_widget(Some(&center_btns));
+            end_row.set_end_widget(Some(&vol_box));
 
             self.root.append(&self.hover_label);
             self.root.append(&self.seek_outer);
@@ -662,6 +690,10 @@ impl PlayerControls {
 
     pub fn widget(&self) -> &Box {
         &self.root
+    }
+
+    pub fn fullscreen_btn(&self) -> &Button {
+        &self.fullscreen_btn
     }
 
     /// Replace the active thumbnail cache (called from window.rs when a new
