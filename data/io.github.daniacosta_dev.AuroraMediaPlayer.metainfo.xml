@@ -3,35 +3,25 @@
   <id>io.github.daniacosta_dev.AuroraMediaPlayer</id>
 
   <name>Aurora Media Player</name>
-  <summary>Modern and customizable media player</summary>
+  <summary>Listen to music, watch local and online videos</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
 
   <description>
-    <p>
-      Aurora Media Player is a modern, clean media player built with GTK4 and
-      libadwaita. Powered by mpv, it supports virtually all video and audio
-      formats with high-quality hardware-accelerated playback.
-    </p>
-    <p>Features:</p>
-    <ul>
-      <li>Plays all common video formats: MP4, MKV, AVI, MOV, WebM and more</li>
-      <li>Plays all common audio formats: MP3, FLAC, OGG, Opus, AAC and more</li>
-      <li>Stream YouTube and other sites via yt-dlp integration</li>
-      <li>Playlist management with shuffle and repeat modes</li>
-      <li>Session restore — resumes playback where you left off</li>
-      <li>Recent files list for quick access</li>
-      <li>Audio metadata display with album art</li>
-      <li>Multi-track audio and subtitle selection</li>
-      <li>Hardware-accelerated decoding via VA-API</li>
-      <li>MPRIS support for system media controls</li>
-      <li>Custom color theme — pick your own accent, background, and text colors</li>
-    </ul>
-  </description>
+  <p>
+    Aurora is a modern media player with a clean GTK4 interface for
+    watching videos, listening to music, and opening online media.
+  </p>
+  <p>
+    It supports most common video and audio formats, playlists, subtitle and
+    audio track selection, session restore, recent files, album art, and MPRIS
+    desktop media controls.
+  </p>
+</description>
 
   <developer id="io.github.daniacosta_dev">
-    <name>Daniel Acosta</name>
+    <name>Dani Acosta</name>
   </developer>
 
   <url type="homepage">https://daniacosta-dev.github.io/aurora-media-player/</url>
@@ -42,15 +32,15 @@
 
   <screenshots>
     <screenshot type="default">
-      <caption>Video playback with controls</caption>
+      <caption>Aurora default view</caption>
       <image>https://raw.githubusercontent.com/daniacosta-dev/aurora-media-player/main/data/screenshots/videoplayer1.png</image>
     </screenshot>
     <screenshot>
-      <caption>Audio playback with album art</caption>
+      <caption>Audio playback</caption>
       <image>https://raw.githubusercontent.com/daniacosta-dev/aurora-media-player/main/data/screenshots/videoplayer2.png</image>
     </screenshot>
     <screenshot>
-      <caption>Playlist management</caption>
+      <caption>Video playback with controls and playlist</caption>
       <image>https://raw.githubusercontent.com/daniacosta-dev/aurora-media-player/main/data/screenshots/videoplayer3.png</image>
     </screenshot>
   </screenshots>
@@ -89,6 +79,18 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.1.4" date="2026-04-01">
+      <description>
+        <p>New features and improvements:</p>
+        <ul>
+          <li>Fullscreen button added to the controls bar</li>
+          <li>allow expanded the playlist area</li>
+          <li>Close option added to the File menu</li>
+          <li>Seek bar thumbnail preview added for local video files</li>
+          <li>Player controls centered in floating mode</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-03-25">
       <description>
         <p>New features and improvements:</p>

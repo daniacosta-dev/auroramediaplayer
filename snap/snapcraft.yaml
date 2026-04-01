@@ -1,6 +1,6 @@
 name: aurora-media-player
 base: core24
-version: '0.1.3'
+version: '0.1.4'
 summary: Modern media player for GNOME
 description: |
   Aurora Media Player is a modern, Haruna-inspired media player for GNOME.
