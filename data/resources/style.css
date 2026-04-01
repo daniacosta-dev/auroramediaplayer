@@ -195,6 +195,12 @@ label.playlist-duration {
     opacity: 1;
 }
 
+/* ── Seek-bar thumbnail preview ─────────────────────────────────────────────── */
+.seek-thumb-picture {
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
 /* ── Audio-only view ────────────────────────────────────────────────────────── */
 .audio-cover-icon {
     margin-bottom: 20px;
