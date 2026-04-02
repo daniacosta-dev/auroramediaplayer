@@ -1494,7 +1494,7 @@ impl MediaWindow {
                 }
             }
 
-            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode, has_prev, has_next);
+            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode, has_prev, has_next, eof);
 
             // ── Seek-bar thumbnail strip ────────────────────────────────
             // Track every path change (local or URL) so switching to a URL
