@@ -326,6 +326,7 @@ impl PlayerControls {
             .build();
         tracks_btn.set_opacity(0.5);
         let tracks_popover = Popover::new();
+        tracks_popover.set_position(gtk4::PositionType::Top);
         tracks_popover.set_parent(&tracks_btn);
         {
             let tp = tracks_popover.clone();
@@ -339,6 +340,7 @@ impl PlayerControls {
             .css_classes(vec!["flat"])
             .build();
         let speed_popover = Popover::new();
+        speed_popover.set_position(gtk4::PositionType::Top);
         {
             let speed_box = Box::builder()
                 .orientation(Orientation::Vertical)
@@ -579,6 +581,17 @@ impl PlayerControls {
 
     pub fn apply_layout(&self, mode: &str) {
         self.is_fixed.set(mode == "fixed");
+
+        // Popovers are outside the controls widget's CSS tree so they need their
+        // own class to pick up modern styling.
+        for pop in [&self.speed_popover, &self.tracks_popover] {
+            if mode == "modern" {
+                pop.add_css_class("popover-modern");
+            } else {
+                pop.remove_css_class("popover-modern");
+            }
+        }
+
         while let Some(child) = self.root.first_child() {
             self.root.remove(&child);
         }

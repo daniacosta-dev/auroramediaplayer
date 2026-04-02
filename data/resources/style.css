@@ -148,6 +148,31 @@ headerbar {
     font-size: 0.8em;
 }
 
+.controls-bar-modern .seek-hover-label {
+    background-color: alpha(black, 0.55);
+    border: none;
+    color: white;
+}
+
+/* ── Popovers — modern mode ──────────────────────────────────────────────────── */
+.popover-modern > contents {
+    background-color: alpha(black, 0.72);
+    border: 1px solid alpha(white, 0.10);
+}
+
+.popover-modern > arrow {
+    background-color: alpha(black, 0.72);
+    border-color: alpha(white, 0.10);
+}
+
+.popover-modern button {
+    color: white;
+}
+
+.popover-modern button:hover {
+    background-color: alpha(white, 0.10);
+}
+
 /* ── Seek bar ───────────────────────────────────────────────────────────────── */
 .seekbar trough {
     min-height: 5px;
