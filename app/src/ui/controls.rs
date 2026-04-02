@@ -54,6 +54,9 @@ pub struct PlayerControls {
     /// compute the correct margin_bottom (fixed: controls are below the video,
     /// so thumbnail should pin to the bottom edge of the video overlay).
     is_fixed: Rc<Cell<bool>>,
+    /// True when playback reached EOF with no next track and no repeat active.
+    /// The play button shows a "replay" icon and clicking it restarts playback.
+    ended: Rc<Cell<bool>>,
 }
 
 impl PlayerControls {
@@ -125,6 +128,7 @@ impl PlayerControls {
             Rc::new(RefCell::new(None));
 
         let is_fixed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+        let ended: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
         // ── Hover time label ──────────────────────────────────────────────
         // Sits in the root Box ABOVE the seek bar so it never overlaps the
@@ -326,6 +330,7 @@ impl PlayerControls {
             .build();
         tracks_btn.set_opacity(0.5);
         let tracks_popover = Popover::new();
+        tracks_popover.set_position(gtk4::PositionType::Top);
         tracks_popover.set_parent(&tracks_btn);
         {
             let tp = tracks_popover.clone();
@@ -339,6 +344,7 @@ impl PlayerControls {
             .css_classes(vec!["flat"])
             .build();
         let speed_popover = Popover::new();
+        speed_popover.set_position(gtk4::PositionType::Top);
         {
             let speed_box = Box::builder()
                 .orientation(Orientation::Vertical)
@@ -433,8 +439,27 @@ impl PlayerControls {
         // ── Signal: play/pause ────────────────────────────────────────────
         {
             let state_c = state.clone();
+            let ended_c = ended.clone();
             play_btn.connect_clicked(move |_| {
-                if let Some(p) = state_c.borrow().player.as_ref() {
+                if ended_c.get() {
+                    // Playback ended with no next track — restart from beginning.
+                    let (path_to_open, new_idx) = {
+                        let s = state_c.borrow();
+                        if s.playlist.len() <= 1 {
+                            // Single file: replay the same file.
+                            (s.current_idx.and_then(|i| s.playlist.get(i).cloned()), s.current_idx)
+                        } else {
+                            // Playlist ended: restart from index 0.
+                            (s.playlist.first().cloned(), Some(0))
+                        }
+                    };
+                    if let Some(path) = path_to_open {
+                        state_c.borrow_mut().current_idx = new_idx;
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::Open(path)).ok();
+                        }
+                    }
+                } else if let Some(p) = state_c.borrow().player.as_ref() {
                     p.execute(PlayerCommand::TogglePause).ok();
                 }
             });
@@ -572,17 +597,29 @@ impl PlayerControls {
             thumb_cache,
             video_overlay_target,
             is_fixed,
+            ended,
         };
-        this.apply_layout(false);
+        this.apply_layout("floating");
         this
     }
 
-    pub fn apply_layout(&self, fixed: bool) {
-        self.is_fixed.set(fixed);
+    pub fn apply_layout(&self, mode: &str) {
+        self.is_fixed.set(mode == "fixed");
+
+        // Popovers are outside the controls widget's CSS tree so they need their
+        // own class to pick up modern styling.
+        for pop in [&self.speed_popover, &self.tracks_popover] {
+            if mode == "modern" {
+                pop.add_css_class("popover-modern");
+            } else {
+                pop.remove_css_class("popover-modern");
+            }
+        }
+
         while let Some(child) = self.root.first_child() {
             self.root.remove(&child);
         }
-        if fixed {
+        if mode == "fixed" {
             let seek_row = gtk::Box::builder()
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(8)
@@ -616,6 +653,50 @@ impl PlayerControls {
             btn_row.append(&self.podcast_btn);
             let sp2 = gtk::Box::builder().hexpand(true).build();
             btn_row.append(&sp2);
+            btn_row.append(&self.tracks_btn);
+            btn_row.append(&self.speed_btn);
+            btn_row.append(&self.vol_btn);
+            btn_row.append(&self.vol_slider);
+            btn_row.append(&self.vol_label);
+            btn_row.append(&self.fullscreen_btn);
+
+            self.root.append(&self.hover_label);
+            self.root.append(&seek_row);
+            self.root.append(&btn_row);
+        } else if mode == "modern" {
+            // Modern: gradient overlay, seek bar flanked by times, single button row below
+            self.seek_outer.set_hexpand(true);
+            self.elapsed.set_valign(gtk::Align::Center);
+            self.remaining.set_valign(gtk::Align::Center);
+
+            let seek_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .margin_start(12)
+                .margin_end(12)
+                .margin_top(4)
+                .margin_bottom(2)
+                .build();
+            seek_row.append(&self.elapsed);
+            seek_row.append(&self.seek_outer);
+            seek_row.append(&self.remaining);
+
+            let btn_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(2)
+                .margin_start(8)
+                .margin_end(8)
+                .margin_bottom(4)
+                .build();
+            btn_row.append(&self.prev_btn);
+            btn_row.append(&self.play_btn);
+            btn_row.append(&self.next_btn);
+            let sp = gtk::Box::builder().hexpand(true).build();
+            btn_row.append(&sp);
+            btn_row.append(&self.repeat_btn);
+            btn_row.append(&self.shuffle_btn);
+            btn_row.append(&self.podcast_btn);
+            btn_row.append(&self.screenshot_btn);
             btn_row.append(&self.tracks_btn);
             btn_row.append(&self.speed_btn);
             btn_row.append(&self.vol_btn);
@@ -748,8 +829,12 @@ impl PlayerControls {
     }
 
     /// Called at ~200 ms — updates buttons and state-driven UI.
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode, shuffle: bool, podcast_mode: bool, has_prev: bool, has_next: bool) {
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode, shuffle: bool, podcast_mode: bool, has_prev: bool, has_next: bool, eof: bool) {
         let has_media = !idle;
+        // "ended" = reached EOF, no repeat active, no next track to auto-advance to.
+        let is_ended = eof && !idle && repeat == RepeatMode::None && !has_next;
+        self.ended.set(is_ended);
+
         self.play_btn.set_sensitive(has_media);
         self.prev_btn.set_sensitive(has_prev);
         self.next_btn.set_sensitive(has_next);
@@ -758,7 +843,9 @@ impl PlayerControls {
 
         self.update_position(pos, dur);
 
-        self.play_btn.set_icon_name(if paused {
+        self.play_btn.set_icon_name(if is_ended {
+            "media-playlist-repeat-symbolic"
+        } else if paused {
             "media-playback-start-symbolic"
         } else {
             "media-playback-pause-symbolic"

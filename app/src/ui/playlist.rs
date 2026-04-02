@@ -369,6 +369,14 @@ impl PlaylistPanel {
         &self.page
     }
 
+    pub fn set_mode(&self, mode: &str) {
+        if mode == "modern" {
+            self.page.add_css_class("playlist-panel-modern");
+        } else {
+            self.page.remove_css_class("playlist-panel-modern");
+        }
+    }
+
     pub fn relabel(&self) {
         self.page.set_title(t("Playlist"));
         self.header_title_label.set_label(t("Playlist"));

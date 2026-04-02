@@ -1292,7 +1292,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
 
     let saved_ui_mode = load_app_settings()
         .ui_mode
-        .unwrap_or_else(|| "floating".into());
+        .unwrap_or_else(|| "modern".into());
 
     let layout_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -1305,15 +1305,21 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .title(t("Control bar style"))
         .build();
 
+    let btn_modern = gtk::ToggleButton::builder()
+        .label(t("Modern"))
+        .active(saved_ui_mode == "modern")
+        .valign(gtk::Align::Center)
+        .build();
     let btn_floating = gtk::ToggleButton::builder()
         .label(t("Floating"))
         .active(saved_ui_mode == "floating")
+        .group(&btn_modern)
         .valign(gtk::Align::Center)
         .build();
     let btn_fixed = gtk::ToggleButton::builder()
         .label(t("Fixed"))
         .active(saved_ui_mode == "fixed")
-        .group(&btn_floating)
+        .group(&btn_modern)
         .valign(gtk::Align::Center)
         .build();
 
@@ -1324,6 +1330,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .margin_top(8)
         .margin_bottom(8)
         .build();
+    layout_btns.append(&btn_modern);
     layout_btns.append(&btn_floating);
     layout_btns.append(&btn_fixed);
 
@@ -1514,6 +1521,15 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
             if btn.is_active() {
                 let mut s = load_app_settings(); s.ui_mode = Some("fixed".into()); save_app_settings(&s);
                 cb("fixed");
+            }
+        }
+    });
+    btn_modern.connect_toggled({
+        let cb = on_ui_mode_change.clone();
+        move |btn| {
+            if btn.is_active() {
+                let mut s = load_app_settings(); s.ui_mode = Some("modern".into()); save_app_settings(&s);
+                cb("modern");
             }
         }
     });

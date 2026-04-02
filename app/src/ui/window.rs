@@ -262,15 +262,17 @@ impl MediaWindow {
         let state = PlayerState::create();
 
         // ── Restore global volume/mute from settings ──────────────────────
-        let fixed_mode = {
+        let initial_mode: String = {
             let settings = super::headerbar::load_app_settings();
             if let Some(p) = state.borrow().player.as_ref() {
                 p.execute(PlayerCommand::SetVolume(settings.volume)).ok();
                 p.execute(PlayerCommand::Mute(settings.muted)).ok();
             }
             state.borrow_mut().muted = settings.muted;
-            settings.ui_mode.as_deref() == Some("fixed")
+            settings.ui_mode.unwrap_or_else(|| "floating".into())
         };
+        let fixed_mode = initial_mode == "fixed";
+        let current_mode: Rc<RefCell<String>> = Rc::new(RefCell::new(initial_mode.clone()));
 
         // ── Background mpv snapshot thread ────────────────────────────────
         // Reads all commonly-polled mpv properties on a dedicated thread so
@@ -333,11 +335,10 @@ impl MediaWindow {
                 });
             }
         }));
-        controls.apply_layout(fixed_mode);
+        controls.apply_layout(&initial_mode);
 
         // ── Layout ────────────────────────────────────────────────────────
         // (fixed_mode already determined above, before window creation)
-        let is_fixed_mode: Rc<Cell<bool>> = Rc::new(Cell::new(fixed_mode));
 
         // Always create the revealer; in fixed mode it starts detached from the tree.
         let controls_revealer = gtk::Revealer::builder()
@@ -358,8 +359,8 @@ impl MediaWindow {
             .width_request(580)
             .build();
 
-        // Initial floating setup: controls inside revealer, overlaid on video.
-        if !fixed_mode {
+        // Initial floating/modern setup: controls inside revealer, overlaid on video.
+        if initial_mode != "fixed" {
             controls.widget().set_valign(gtk::Align::End);
             controls_revealer.set_child(Some(controls.widget()));
             video_controls.add_overlay(&controls_revealer);
@@ -427,39 +428,120 @@ impl MediaWindow {
             .vexpand(true)
             .build();
 
-        // Initial fixed setup: controls below the toolbar_view, with flat CSS.
-        if fixed_mode {
-            controls.widget().add_css_class("controls-bar-fixed");
+        // Initial mode CSS setup.
+        match initial_mode.as_str() {
+            "fixed"  => controls.widget().add_css_class("controls-bar-fixed"),
+            "modern" => controls.widget().add_css_class("controls-bar-modern"),
+            _        => {}
+        }
+        playlist.set_mode(&initial_mode);
+        // In modern mode the playlist overlays the video instead of sitting beside it.
+        if initial_mode == "modern" {
+            paned.set_end_child(None::<&gtk::Widget>);
+            let pw = playlist.widget();
+            pw.set_halign(gtk::Align::End);
+            pw.set_hexpand(false);
+            pw.set_vexpand(true);
+            pw.set_size_request(sidebar_px.get(), -1);
+            // Z-order: playlist must sit below controls and thumbnails.
+            // Remove controls_revealer + thumb, insert playlist first, then re-add on top.
+            video_controls.remove_overlay(&controls_revealer);
+            video_controls.remove_overlay(controls.thumb_widget());
+            video_controls.add_overlay(pw);
+            video_controls.add_overlay(&controls_revealer);
+            video_controls.set_clip_overlay(&controls_revealer, true);
+            video_controls.add_overlay(controls.thumb_widget());
         }
 
         // ── Dynamic mode switching callback ─────────────────────────────────
         let controls_for_layout = controls.clone();
         let on_ui_mode_change: Rc<dyn Fn(&str)> = {
-            let is_fixed_mode = is_fixed_mode.clone();
+            let current_mode      = current_mode.clone();
             let controls_revealer = controls_revealer.clone();
-            let video_controls = video_controls.clone();
-            let outer_box = outer_box.clone();
-            let controls_widget = controls.widget().clone();
+            let video_controls    = video_controls.clone();
+            let outer_box         = outer_box.clone();
+            let controls_widget   = controls.widget().clone();
+            let playlist_widget   = playlist.widget().clone();
+            let paned_c           = paned.clone();
+            let sidebar_px_c      = sidebar_px.clone();
             Rc::new(move |mode: &str| {
-                let now_fixed = mode == "fixed";
-                if now_fixed == is_fixed_mode.get() { return; }
-                is_fixed_mode.set(now_fixed);
-                controls_for_layout.apply_layout(now_fixed);
-                if now_fixed {
-                    // Floating → Fixed: unparent from revealer, add to outer_box
+                let prev = current_mode.borrow().clone();
+                if mode == prev { return; }
+                let was_fixed  = prev == "fixed";
+                let now_fixed  = mode == "fixed";
+                let was_modern = prev == "modern";
+                let now_modern = mode == "modern";
+                *current_mode.borrow_mut() = mode.to_string();
+
+                controls_for_layout.apply_layout(mode);
+
+                // Clear all mode CSS classes before re-applying.
+                controls_widget.remove_css_class("controls-bar-fixed");
+                controls_widget.remove_css_class("controls-bar-modern");
+                if now_modern {
+                    playlist_widget.add_css_class("playlist-panel-modern");
+                } else {
+                    playlist_widget.remove_css_class("playlist-panel-modern");
+                }
+
+                // ── Playlist position: paned ↔ video overlay ───────────────
+                if !was_modern && now_modern {
+                    // Any mode → Modern: move playlist from paned into the video overlay.
+                    paned_c.set_end_child(None::<&gtk::Widget>);
+                    playlist_widget.set_halign(gtk::Align::End);
+                    playlist_widget.set_hexpand(false);
+                    playlist_widget.set_vexpand(true);
+                    playlist_widget.set_size_request(sidebar_px_c.get(), -1);
+                    // Playlist is added now; z-order is fixed after the controls block below.
+                    video_controls.add_overlay(&playlist_widget);
+                } else if was_modern && !now_modern {
+                    // Modern → Any mode: restore playlist to paned.
+                    video_controls.remove_overlay(&playlist_widget);
+                    playlist_widget.set_halign(gtk::Align::Fill);
+                    playlist_widget.set_hexpand(false);
+                    playlist_widget.set_vexpand(true);
+                    playlist_widget.set_size_request(MIN_SIDEBAR_PX, -1);
+                    paned_c.set_end_child(Some(&playlist_widget));
+                    // If the playlist is visible, restore the paned split position.
+                    if playlist_widget.is_visible() {
+                        let w = paned_c.width();
+                        if w > 0 {
+                            let target = sidebar_px_c.get().clamp(MIN_SIDEBAR_PX, (w * 40 / 100).min(600));
+                            paned_c.set_position((w - target).max(0));
+                        }
+                    }
+                }
+
+                // ── Controls bar overlay ───────────────────────────────────
+                if now_fixed && !was_fixed {
+                    // Overlay (floating/modern) → Fixed
                     controls_revealer.set_child(None::<&gtk::Widget>);
                     video_controls.remove_overlay(&controls_revealer);
                     controls_widget.add_css_class("controls-bar-fixed");
                     outer_box.append(&controls_widget);
-                } else {
-                    // Fixed → Floating: unparent from outer_box, put back in revealer
+                } else if !now_fixed && was_fixed {
+                    // Fixed → Overlay (floating/modern)
                     outer_box.remove(&controls_widget);
-                    controls_widget.remove_css_class("controls-bar-fixed");
+                    if now_modern { controls_widget.add_css_class("controls-bar-modern"); }
                     controls_widget.set_valign(gtk::Align::End);
                     controls_revealer.set_child(Some(&controls_widget));
                     controls_revealer.set_reveal_child(true);
                     video_controls.add_overlay(&controls_revealer);
                     video_controls.set_clip_overlay(&controls_revealer, true);
+                } else {
+                    // Both overlay modes (floating ↔ modern): widget stays in revealer, just update CSS.
+                    if now_modern { controls_widget.add_css_class("controls-bar-modern"); }
+                }
+
+                // ── Z-order fix for modern overlay ────────────────────────
+                // After all overlay changes, ensure: playlist (bottom) → controls_revealer
+                // → thumb_widget (top), so the control bar is never covered by the playlist.
+                if now_modern && !now_fixed {
+                    video_controls.remove_overlay(&controls_revealer);
+                    video_controls.remove_overlay(controls_for_layout.thumb_widget());
+                    video_controls.add_overlay(&controls_revealer);
+                    video_controls.set_clip_overlay(&controls_revealer, true);
+                    video_controls.add_overlay(controls_for_layout.thumb_widget());
                 }
             })
         };
@@ -565,39 +647,140 @@ impl MediaWindow {
 
         // ── Playlist toggle ───────────────────────────────────────────────
         {
-            let paned_w    = paned.downgrade();
-            let playlist_w = playlist.widget().downgrade();
-            let window_w   = window.downgrade();
-            let px         = sidebar_px.clone();
+            let paned_w      = paned.downgrade();
+            let playlist_w   = playlist.widget().downgrade();
+            let window_w     = window.downgrade();
+            let px           = sidebar_px.clone();
+            let mode_ref     = current_mode.clone();
             header.playlist_btn.connect_toggled(move |btn| {
                 let Some(paned)    = paned_w.upgrade()    else { return };
                 let Some(playlist) = playlist_w.upgrade() else { return };
+                let is_modern = *mode_ref.borrow() == "modern";
                 if btn.is_active() {
                     playlist.set_visible(true);
-                    let w = paned.width();
-                    if w > 0 {
-                        paned.set_position((w - px.get()).max(w - max_sidebar(w)).max(0));
-                    }
-                    // Enforce wider minimum so video area + sidebar both fit.
-                    if let Some(win) = window_w.upgrade() {
-                        win.set_size_request(580 + MIN_SIDEBAR_PX, min_height);
+                    if !is_modern {
+                        let w = paned.width();
+                        if w > 0 {
+                            paned.set_position((w - px.get()).max(w - max_sidebar(w)).max(0));
+                        }
+                        // Enforce wider minimum so video area + sidebar both fit.
+                        if let Some(win) = window_w.upgrade() {
+                            win.set_size_request(580 + MIN_SIDEBAR_PX, min_height);
+                        }
                     }
                 } else {
-                    // Persist current sidebar width before hiding.
-                    let w   = paned.width();
-                    let pos = paned.position();
-                    if w > 0 && pos > 0 && pos < w {
-                        px.set((w - pos).clamp(MIN_SIDEBAR_PX, max_sidebar(w)));
+                    if !is_modern {
+                        // Persist current sidebar width before hiding.
+                        let w   = paned.width();
+                        let pos = paned.position();
+                        if w > 0 && pos > 0 && pos < w {
+                            px.set((w - pos).clamp(MIN_SIDEBAR_PX, max_sidebar(w)));
+                        }
                     }
                     playlist.set_visible(false);
-                    // Restore narrower minimum when playlist is closed.
-                    if let Some(win) = window_w.upgrade() {
-                        win.set_size_request(580, min_height);
+                    if !is_modern {
+                        // Restore narrower minimum when playlist is closed.
+                        if let Some(win) = window_w.upgrade() {
+                            win.set_size_request(580, min_height);
+                        }
                     }
                 }
             });
         }
 
+
+        // ── Playlist resize in modern overlay mode ────────────────────────
+        // GestureDrag is attached to video_controls (the stable parent) instead
+        // of the playlist widget itself.  The playlist has halign:End so its left
+        // edge shifts every time set_size_request is called; using the parent's
+        // coordinate space avoids the jitter caused by that shift.
+        {
+            let pw       = playlist.widget().clone();
+            let px       = sidebar_px.clone();
+            let mode_ref = current_mode.clone();
+            let start_w: Rc<Cell<i32>> = Rc::new(Cell::new(0));
+
+            // Drag gesture lives on the stable video_controls overlay.
+            let drag = gtk::GestureDrag::new();
+
+            drag.connect_drag_begin({
+                let pw_c = pw.downgrade();
+                let sw   = start_w.clone();
+                let mode = mode_ref.clone();
+                move |gesture, x, _| {
+                    if *mode.borrow() != "modern" {
+                        gesture.set_state(gtk::EventSequenceState::Denied);
+                        return;
+                    }
+                    if let Some(p) = pw_c.upgrade() {
+                        // playlist left edge in video_controls space
+                        let playlist_left = p.allocation().x() as f64;
+                        if (x - playlist_left).abs() < 10.0 {
+                            sw.set(p.width());
+                        } else {
+                            gesture.set_state(gtk::EventSequenceState::Denied);
+                        }
+                    }
+                }
+            });
+
+            drag.connect_drag_update({
+                let pw_c = pw.downgrade();
+                let sw   = start_w.clone();
+                let px_c = px.clone();
+                let vc   = video_controls.downgrade();
+                move |_, offset_x, _| {
+                    if let Some(p) = pw_c.upgrade() {
+                        let max_w = vc.upgrade()
+                            .map(|v| (v.width() * 40 / 100).min(600))
+                            .unwrap_or(600);
+                        // offset_x > 0 = dragged right = panel narrower
+                        let new_w = (sw.get() - offset_x as i32)
+                            .max(MIN_SIDEBAR_PX)
+                            .min(max_w);
+                        p.set_size_request(new_w, -1);
+                        px_c.set(new_w);
+                    }
+                }
+            });
+
+            drag.connect_drag_end({
+                let pw_c = pw.downgrade();
+                let px_c = px.clone();
+                move |_, _, _| {
+                    if let Some(p) = pw_c.upgrade() { px_c.set(p.width()); }
+                }
+            });
+
+            video_controls.add_controller(drag);
+
+            // Cursor hint: ew-resize on the playlist's left edge.
+            let mc = gtk::EventControllerMotion::new();
+            mc.connect_motion({
+                let pw_c = pw.downgrade();
+                let vc   = video_controls.downgrade();
+                let mode = mode_ref.clone();
+                move |_, x, _| {
+                    let Some(p)  = pw_c.upgrade() else { return };
+                    let Some(vc) = vc.upgrade()   else { return };
+                    if *mode.borrow() == "modern" {
+                        let playlist_left = p.allocation().x() as f64;
+                        if (x - playlist_left).abs() < 10.0 {
+                            vc.set_cursor_from_name(Some("ew-resize"));
+                            return;
+                        }
+                    }
+                    vc.set_cursor(None::<&gdk4::Cursor>);
+                }
+            });
+            mc.connect_leave({
+                let vc = video_controls.downgrade();
+                move |_| {
+                    if let Some(vc) = vc.upgrade() { vc.set_cursor(None::<&gdk4::Cursor>); }
+                }
+            });
+            video_controls.add_controller(mc);
+        }
 
         // ── Sync maximize button ↔ fullscreen ────────────────────────────
         // When the user clicks the title-bar restore button while fullscreen,
@@ -640,49 +823,63 @@ impl MediaWindow {
                 });
             });
         }
-        // Fix revealer width after exiting fullscreen.
+        // Fix revealer width after exiting fullscreen or unmaximizing.
         //
         // GTK's Revealer caches its child allocation when a transition ends.
-        // After unfullscreen the overlay is correctly sized to the window but
-        // the revealer's cached child allocation still holds the fullscreen
-        // width. A queue_resize() once the window width has stabilised forces
-        // a fresh measure/allocate pass that clears the stale cache.
+        // After unfullscreen/unmaximize the overlay is correctly sized to the
+        // window but the revealer's cached child allocation still holds the
+        // previous width. A queue_resize() once the window width has stabilised
+        // forces a fresh measure/allocate pass that clears the stale cache.
         //
         // We poll window.width() every frame until it's stable for two
         // consecutive ticks — that's the earliest point the compositor has
         // committed the new size and GTK has applied it.
         {
-            let revealer_w = controls_revealer.downgrade();
-            let win_w      = window.downgrade();
+            // Shared helper: schedules a queue_resize() once the window width
+            // has stabilised after a size-changing window state transition.
+            let schedule_revealer_resize = {
+                let revealer_w = controls_revealer.downgrade();
+                let win_w      = window.downgrade();
+                move || {
+                    let r      = revealer_w.clone();
+                    let ww     = win_w.clone();
+                    let prev_w = Rc::new(Cell::new(-1i32));
+                    let ticks  = Rc::new(Cell::new(0u32));
 
-            window.connect_notify_local(Some("fullscreened"), move |_, _| {
-                let Some(win) = win_w.upgrade() else { return };
-                if win.property::<bool>("fullscreened") { return; }
+                    glib::timeout_add_local(Duration::from_millis(16), move || {
+                        let t = ticks.get() + 1;
+                        ticks.set(t);
+                        if t > 125 { return glib::ControlFlow::Break; } // 2 s safety
 
-                let r      = revealer_w.clone();
-                let ww     = win_w.clone();
-                let prev_w = Rc::new(Cell::new(-1i32));
-                let ticks  = Rc::new(Cell::new(0u32));
+                        let Some(win) = ww.upgrade() else { return glib::ControlFlow::Break; };
+                        let w = win.width();
+                        let pw = prev_w.get();
+                        prev_w.set(w);
 
-                glib::timeout_add_local(Duration::from_millis(16), move || {
-                    let t = ticks.get() + 1;
-                    ticks.set(t);
-                    if t > 125 { return glib::ControlFlow::Break; } // 2 s safety
-
-                    let Some(win) = ww.upgrade() else { return glib::ControlFlow::Break; };
-                    let w = win.width();
-                    let pw = prev_w.get();
-                    prev_w.set(w);
-
-                    if w > 0 && w == pw {
-                        // Width stable for two consecutive frames — safe to re-measure.
-                        if let Some(rev) = r.upgrade() {
-                            rev.queue_resize();
+                        if w > 0 && w == pw {
+                            // Width stable for two consecutive frames — safe to re-measure.
+                            if let Some(rev) = r.upgrade() {
+                                rev.queue_resize();
+                            }
+                            return glib::ControlFlow::Break;
                         }
-                        return glib::ControlFlow::Break;
-                    }
-                    glib::ControlFlow::Continue
-                });
+                        glib::ControlFlow::Continue
+                    });
+                }
+            };
+
+            window.connect_notify_local(Some("fullscreened"), {
+                let schedule = schedule_revealer_resize.clone();
+                move |win, _| {
+                    if !win.property::<bool>("fullscreened") { schedule(); }
+                }
+            });
+
+            window.connect_notify_local(Some("maximized"), {
+                let schedule = schedule_revealer_resize.clone();
+                move |win, _| {
+                    if !win.property::<bool>("maximized") { schedule(); }
+                }
             });
         }
 
@@ -1099,7 +1296,7 @@ impl MediaWindow {
         let window_weak = window.downgrade();
         let toolbar_view_weak = toolbar_view.downgrade();
         let controls_revealer_weak = controls_revealer.downgrade();
-        let is_fixed_mode_c = is_fixed_mode.clone();
+        let is_fixed_mode_c = current_mode.clone();
         let mouse_over_controls_c = mouse_over_controls.clone();
         let playlist_widget_weak = playlist.widget().downgrade();
         let playlist_btn_weak = header.playlist_btn.downgrade();
@@ -1297,7 +1494,7 @@ impl MediaWindow {
                 }
             }
 
-            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode, has_prev, has_next);
+            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode, has_prev, has_next, eof);
 
             // ── Seek-bar thumbnail strip ────────────────────────────────
             // Track every path change (local or URL) so switching to a URL
@@ -1476,7 +1673,7 @@ impl MediaWindow {
                         if let Some(tv) = toolbar_view_weak.upgrade() {
                             tv.set_reveal_top_bars(false);
                         }
-                        if !is_fixed_mode_c.get() {
+                        if *is_fixed_mode_c.borrow() != "fixed" {
                             if let Some(r) = controls_revealer_weak.upgrade() {
                                 r.set_reveal_child(false);
                             }
@@ -1494,8 +1691,10 @@ impl MediaWindow {
                     if let Some(tv) = toolbar_view_weak.upgrade() {
                         tv.set_reveal_top_bars(true);
                     }
-                    if !is_fixed_mode_c.get() {
-                        if idle_secs > hide_after && !idle && !popover_open {
+                    if *is_fixed_mode_c.borrow() != "fixed" {
+                        let playlist_open_in_modern = *is_fixed_mode_c.borrow() == "modern"
+                            && playlist_btn_weak.upgrade().is_some_and(|b| b.is_active());
+                        if idle_secs > hide_after && !idle && !popover_open && !playlist_open_in_modern {
                             if let Some(r) = controls_revealer_weak.upgrade() {
                                 r.set_reveal_child(false);
                             }
