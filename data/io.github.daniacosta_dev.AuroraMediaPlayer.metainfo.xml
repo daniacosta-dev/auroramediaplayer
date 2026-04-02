@@ -83,6 +83,15 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.1.5" date="2026-04-01">
+      <description>
+        <p>Improvements:</p>
+        <ul>
+          <li>App name shortened to Aurora in system menus and default apps</li>
+          <li>Aurora now appears as an option in GNOME Default Apps for Music and Video</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.4" date="2026-04-01">
       <description>
         <p>New features and improvements:</p>

@@ -1,5 +1,6 @@
 [Desktop Entry]
-Name=Aurora Media Player
+Name=Aurora MP
+GenericName=Media Player
 Comment=Modern media player for GNOME
 Exec=aurora-media %U
 Icon=io.github.daniacosta_dev.AuroraMediaPlayer
