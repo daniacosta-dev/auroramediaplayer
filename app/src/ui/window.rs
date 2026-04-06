@@ -21,6 +21,7 @@ use super::{
     video_area::VideoArea,
     controls::{PlayerControls, QualityDisplay},
     playlist::PlaylistPanel,
+    library::LibraryView,
 };
 
 pub struct MediaWindow {
@@ -664,7 +665,92 @@ impl MediaWindow {
         }
 
         toast_overlay.set_child(Some(&outer_box));
-        window.set_content(Some(&toast_overlay));
+
+        // ── Library + Stack ───────────────────────────────────────────────
+        // gtk::Stack keeps BOTH the library widget and the player widget (toast_overlay)
+        // permanently in the widget tree so the MPV GLArea is never unrealized.
+        // NavigationView was removed because popping a NavigationPage unrealizes the
+        // GLArea child, which invalidates the OpenGL render context and breaks the UI.
+        let library_view = Rc::new(LibraryView::new(state.clone()));
+
+        let main_stack = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::SlideLeftRight)
+            .transition_duration(250)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+
+        main_stack.add_named(library_view.page(), Some("library"));
+        main_stack.add_named(&toast_overlay, Some("player"));
+        // Start on library page.
+        main_stack.set_visible_child_name("library");
+
+        window.set_content(Some(&main_stack));
+
+        // ── "Back to Library" button in the player headerbar ─────────────
+        let library_btn = gtk::Button::builder()
+            .icon_name("go-home-symbolic")
+            .tooltip_text(crate::i18n::t("Library"))
+            .build();
+        header.widget().pack_start(&library_btn);
+        {
+            let stack_w = main_stack.downgrade();
+            library_btn.connect_clicked(move |_| {
+                if let Some(stack) = stack_w.upgrade() {
+                    stack.set_visible_child_name("library");
+                }
+            });
+        }
+
+        // ── Library → Player navigation ───────────────────────────────────
+        {
+            let stack_c    = main_stack.downgrade();
+            let state_c    = state.clone();
+            let playlist_c = playlist.clone();
+            library_view.connect_play(move |path| {
+                let Some(stack) = stack_c.upgrade() else { return };
+                stack.set_visible_child_name("player");
+                let title = path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("?")
+                    .to_string();
+                load_playlist_items(vec![(title, path)], &state_c, &playlist_c, true);
+            });
+        }
+
+        // ── "Now Playing" button → back to player ────────────────────────
+        {
+            let stack_c = main_stack.downgrade();
+            library_view.connect_now_playing(move || {
+                if let Some(stack) = stack_c.upgrade() {
+                    stack.set_visible_child_name("player");
+                }
+            });
+        }
+
+        // ── Add-folder button in library header ───────────────────────────
+        {
+            let library_c = library_view.clone();
+            let window_w  = window.downgrade();
+            library_view.connect_add_folder(move || {
+                let dialog = gtk::FileDialog::builder()
+                    .title(crate::i18n::t("Add folder to library"))
+                    .build();
+                let win = window_w.upgrade().map(|w| w.upcast::<gtk::Window>());
+                let lib = library_c.clone();
+                dialog.select_folder(
+                    win.as_ref(),
+                    None::<&gio::Cancellable>,
+                    move |result| {
+                        if let Ok(file) = result {
+                            if let Some(path) = file.path() {
+                                lib.add_folder(path);
+                            }
+                        }
+                    },
+                );
+            });
+        }
 
         // ── Playlist toggle ───────────────────────────────────────────────
         {
@@ -1355,6 +1441,8 @@ impl MediaWindow {
         // Track the last file+duration key for which thumbnails were generated
         // to avoid re-running ffmpeg every 200 ms for the same file.
         let last_thumb_key: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+        let library_view_200 = library_view.clone();
+        let main_stack_200   = main_stack.downgrade();
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let _tick_start = std::time::Instant::now();
@@ -1634,10 +1722,24 @@ impl MediaWindow {
                     None => {
                         window_title_c.set_title("Aurora Media Player");
                         window_title_c.set_subtitle("");
+                        // Hide "Now Playing" button when nothing is playing.
+                        if main_stack_200.upgrade()
+                            .map(|s| s.visible_child_name().as_deref() == Some("library"))
+                            .unwrap_or(false)
+                        {
+                            library_view_200.set_now_playing(false, "");
+                        }
                     }
                     Some(name) => {
                         window_title_c.set_title(&format!("Aurora Media Player — {name}"));
                         window_title_c.set_subtitle(&artist);
+                        // Show "Now Playing" button only when the library is visible.
+                        if main_stack_200.upgrade()
+                            .map(|s| s.visible_child_name().as_deref() == Some("library"))
+                            .unwrap_or(false)
+                        {
+                            library_view_200.set_now_playing(true, &name);
+                        }
                     }
                 }
 
