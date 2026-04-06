@@ -37,4 +37,5 @@ pub enum PlayerCommand {
     SetSubtitleTrack(i64),   // 0 means disable
     AddSubtitle(std::path::PathBuf),
     SetVideoEnabled(bool),
+    SetToneMapping(String),
 }
