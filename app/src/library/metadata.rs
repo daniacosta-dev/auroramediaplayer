@@ -108,35 +108,48 @@ pub fn probe_file(path: &Path) -> ProbeResult {
     }
 
     // ── Thumbnail extraction ───────────────────────────────────────────────
-    result.thumbnail_path = extract_thumbnail(path);
+    result.thumbnail_path = extract_thumbnail(path, result.duration_secs);
 
     result
 }
 
 /// Extract embedded cover art (audio) or a key frame (video) to the cache dir.
 /// Returns the cache path on success.
-fn extract_thumbnail(source: &Path) -> Option<PathBuf> {
+fn extract_thumbnail(source: &Path, duration_secs: Option<f64>) -> Option<PathBuf> {
     let cache_dir = dirs::cache_dir()?.join("aurora-media").join("thumbs");
     std::fs::create_dir_all(&cache_dir).ok()?;
 
     // Use a hash of the path as the filename to avoid collisions.
+    // Suffix "_s" marks small-scaled thumbnails (160×100) — different from any
+    // full-resolution thumbnails that may exist in the cache from older versions.
     let hash = simple_hash(source.to_string_lossy().as_bytes());
-    let thumb_path = cache_dir.join(format!("{hash:016x}.jpg"));
+    let thumb_path = cache_dir.join(format!("{hash:016x}_m.jpg"));
 
     // Skip extraction if the thumbnail already exists.
     if thumb_path.exists() {
         return Some(thumb_path);
     }
 
-    // ffmpeg: extract first embedded image stream, or grab frame at 10% of duration.
+    // Seek to 10% of the duration (clamped 1–60 s) so we avoid black leader
+    // frames at the start.  For audio with embedded cover art, the seek has no
+    // practical effect because the image stream has no time dimension.
+    let seek_secs = duration_secs
+        .map(|d| (d * 0.10).clamp(1.0, 60.0))
+        .unwrap_or(3.0);
+    let seek_arg = format!("{seek_secs:.1}");
+
+    // ffmpeg: input-seek to avoid black frames, scale to fit within 160×100,
+    // pad to exactly 160×100 so gtk::Picture always has a fixed natural size.
     let status = std::process::Command::new("ffmpeg")
         .args([
             "-v", "quiet",
+            "-ss", &seek_arg,        // seek before input (fast keyframe seek)
             "-y",                    // overwrite
             "-i", &source.to_string_lossy(),
             "-an",                   // no audio
             "-vframes", "1",         // single frame
-            "-q:v", "3",             // JPEG quality
+            "-vf", "scale=160:100:force_original_aspect_ratio=decrease,pad=160:100:(ow-iw)/2:(oh-ih)/2:color=black",
+            "-q:v", "1",             // highest JPEG quality (1=best, 31=worst)
         ])
         .arg(&thumb_path)
         .status();

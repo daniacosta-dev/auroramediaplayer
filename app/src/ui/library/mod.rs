@@ -11,7 +11,7 @@ use gtk4::{self as gtk, Button, Label};
 use gtk4::prelude::*;
 
 use crate::i18n::t;
-use crate::library::LibraryStore;
+use crate::library::{LibraryStore, metadata::probe_batch_async};
 use crate::state::SharedState;
 
 pub use sidebar::LibrarySidebar;
@@ -140,11 +140,14 @@ impl LibraryView {
             let grid_c    = grid.clone_ref();
             let sidebar_c = sidebar.clone_ref();
             scan_btn.connect_clicked(move |_| {
-                let mut s = store_c.borrow_mut();
-                s.rescan();
-                s.save();
-                sidebar_c.update_folders(s.watched_folders.clone());
-                grid_c.show_items(s.items.clone());
+                {
+                    let mut s = store_c.borrow_mut();
+                    s.rescan();
+                    s.save();
+                    sidebar_c.update_folders(s.watched_folders.clone());
+                    grid_c.show_items(s.items.clone());
+                }
+                probe_unprobed(&store_c, &grid_c);
             });
         }
 
@@ -224,19 +227,68 @@ impl LibraryView {
         let s = self.store.borrow();
         self.sidebar.update_folders(s.watched_folders.clone());
         self.grid.show_items(s.items.clone());
+        drop(s);
+        probe_unprobed(&self.store, &self.grid);
     }
 
     pub fn add_folder(&self, folder: PathBuf) {
-        let mut s = self.store.borrow_mut();
-        if s.add_folder(folder) {
-            s.rescan();
-            s.save();
-            self.sidebar.update_folders(s.watched_folders.clone());
-            self.grid.show_items(s.items.clone());
+        let added = {
+            let mut s = self.store.borrow_mut();
+            if s.add_folder(folder) {
+                s.rescan();
+                s.save();
+                self.sidebar.update_folders(s.watched_folders.clone());
+                self.grid.show_items(s.items.clone());
+                true
+            } else {
+                false
+            }
+        };
+        if added {
+            probe_unprobed(&self.store, &self.grid);
         }
     }
 
     pub fn store(&self) -> Rc<RefCell<LibraryStore>> {
         self.store.clone()
     }
+}
+
+// ── Background metadata probe ─────────────────────────────────────────────────
+
+/// Collect items that still lack a thumbnail and probe them in the background.
+/// On each result, update the store item and swap just that card in the grid.
+fn probe_unprobed(store: &Rc<RefCell<LibraryStore>>, grid: &MediaGrid) {
+    let paths: Vec<PathBuf> = {
+        let s = store.borrow();
+        s.items.iter()
+            .filter(|i| match &i.thumbnail_path {
+                None => true,
+                Some(p) => !p.exists(),
+            })
+            .map(|i| i.path.clone())
+            .collect()
+    };
+    if paths.is_empty() { return; }
+
+    let store_c = store.clone();
+    let grid_c  = grid.clone_ref();
+
+    probe_batch_async(paths, move |result| {
+        let thumb_path = result.thumbnail_path.clone();
+
+        // Merge all probed metadata into the store item.
+        {
+            let mut s = store_c.borrow_mut();
+            if let Some(item) = s.items.iter_mut().find(|i| i.path == result.path) {
+                result.apply_to(item);
+            }
+            s.save();
+        }
+
+        // If we got a thumbnail, update just that card in the grid.
+        if let Some(thumb) = thumb_path {
+            grid_c.update_item_thumbnail(&result.path, thumb);
+        }
+    });
 }

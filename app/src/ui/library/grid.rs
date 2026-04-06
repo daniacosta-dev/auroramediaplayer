@@ -127,6 +127,25 @@ impl MediaGrid {
         self.inner.flow.invalidate_filter();
     }
 
+    /// Update just one card's thumbnail after async probe completes.
+    /// Replaces the single FlowBoxChild at the item's index — no full rebuild.
+    pub fn update_item_thumbnail(&self, path: &std::path::Path, thumb_path: std::path::PathBuf) {
+        let idx = self.inner.items.borrow().iter().position(|i| i.path == path);
+        let Some(idx) = idx else { return };
+
+        self.inner.items.borrow_mut()[idx].thumbnail_path = Some(thumb_path);
+
+        if let Some(old_child) = self.inner.flow.child_at_index(idx as i32) {
+            let new_card = {
+                let items = self.inner.items.borrow();
+                make_card(&items[idx])
+            };
+            self.inner.flow.remove(&old_child);
+            self.inner.flow.insert(&new_card, idx as i32);
+            self.inner.flow.invalidate_filter();
+        }
+    }
+
     /// Switch the active filter — O(1), no widget rebuild.
     pub fn apply_filter(&self, filter: &str) {
         let kind = match filter {
@@ -150,17 +169,22 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
         .build();
 
     // ── Thumbnail area ────────────────────────────────────────────────────
+    // The Overlay is fixed at 160×100.  Thumbnails are extracted at that exact
+    // size by ffmpeg, so Picture's natural size == 160×100 and the FlowBox can
+    // pack multiple cards per row correctly.
     let thumb_overlay = gtk::Overlay::new();
     thumb_overlay.set_size_request(160, 100);
 
-    let thumb = if let Some(thumb_path) = &item.thumbnail_path {
-        gtk::Picture::for_filename(thumb_path)
+    let thumb_widget: gtk::Widget = if let Some(thumb_path) = &item.thumbnail_path {
+        let pic = gtk::Picture::for_filename(thumb_path);
+        pic.set_content_fit(gtk::ContentFit::Cover);
+        pic.set_can_shrink(true);
+        pic.set_size_request(160, 100);
+        pic.upcast()
     } else {
-        placeholder_picture(item)
+        make_placeholder(item).upcast()
     };
-    thumb.set_content_fit(gtk::ContentFit::Cover);
-    thumb.set_size_request(160, 100);
-    thumb_overlay.set_child(Some(&thumb));
+    thumb_overlay.set_child(Some(&thumb_widget));
 
     // Duration badge (bottom-right)
     if let Some(dur) = item.duration_secs {
@@ -173,21 +197,6 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
             .margin_bottom(6)
             .build();
         thumb_overlay.add_overlay(&dur_lbl);
-    }
-
-    // Resolution badge (top-right) for video
-    if item.kind == MediaKind::Video {
-        if let Some(res) = item.resolution_label() {
-            let res_lbl = Label::builder()
-                .label(res)
-                .css_classes(vec!["library-badge", "library-badge-res"])
-                .halign(Align::End)
-                .valign(Align::Start)
-                .margin_end(6)
-                .margin_top(6)
-                .build();
-            thumb_overlay.add_overlay(&res_lbl);
-        }
     }
 
     card_box.append(&thumb_overlay);
@@ -251,18 +260,28 @@ trait Tap: Sized {
 }
 impl<T> Tap for T {}
 
-fn placeholder_picture(item: &MediaItem) -> gtk::Picture {
+fn make_placeholder(item: &MediaItem) -> gtk::Box {
     let icon_name = match item.kind {
         MediaKind::Video => "video-x-generic-symbolic",
         MediaKind::Audio => "audio-x-generic-symbolic",
     };
     let icon = gtk::Image::from_icon_name(icon_name);
-    icon.set_pixel_size(48);
+    icon.set_pixel_size(40);
+    icon.set_halign(Align::Center);
+    icon.set_valign(Align::Center);
+    icon.set_hexpand(true);
+    icon.set_vexpand(true);
     icon.add_css_class("dim-label");
-    // Picture wrapping the icon widget
-    let pic = gtk::Picture::new();
-    pic.set_can_shrink(true);
-    pic
+
+    let placeholder = gtk::Box::builder()
+        .orientation(Orientation::Vertical)
+        .halign(Align::Fill)
+        .valign(Align::Fill)
+        .css_classes(vec!["library-card-placeholder"])
+        .build();
+    placeholder.set_size_request(160, 100);
+    placeholder.append(&icon);
+    placeholder
 }
 
 fn fmt_duration(total_secs: u64) -> String {

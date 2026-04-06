@@ -71,9 +71,35 @@ const AUDIO_EXTENSIONS: &[&str] = &[
 ];
 
 /// Minimum file size in bytes to be considered a real media file.
-/// Filters out zero-byte placeholders, partial downloads, and TypeScript
-/// source files that happen to share extensions with media formats (e.g. .ts).
+/// Filters out zero-byte placeholders, partial downloads, and small code files
+/// that share extensions with media formats (e.g. .ts TypeScript).
 const MIN_MEDIA_BYTES: u64 = 64 * 1024; // 64 KB
+
+/// Directory names that are never media sources — always skipped during scan.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules", "target", "dist", "build", ".git", ".svn",
+    "__pycache__", "vendor", "bower_components", ".cache", ".npm",
+    ".yarn", "out", "coverage", ".next", ".nuxt",
+];
+
+/// Returns true if the lowercased file name looks like a code/build artifact
+/// rather than a real media file, even if its final extension matches a media format.
+///
+/// Examples caught:
+///   foo.d.ts        → TypeScript declaration file  (ext = "ts")
+///   foo.js.map      → source map                   (ext = "map" — not in our list anyway)
+///   index.d.mts     → ESM declaration              (ext = "mts")
+///   chunk.d.m2ts    → would be absurd but caught   (ext = "m2ts")
+fn is_code_artifact(file_name_lower: &str) -> bool {
+    // Multi-extension patterns that indicate code files sharing a media extension.
+    const CODE_SUFFIXES: &[&str] = &[
+        ".d.ts", ".d.mts", ".d.cts",   // TypeScript declarations
+        ".min.ts",                       // minified TS (rare but possible)
+        ".spec.ts", ".test.ts",          // test files
+        ".stories.ts",                   // Storybook
+    ];
+    CODE_SUFFIXES.iter().any(|suffix| file_name_lower.ends_with(suffix))
+}
 
 /// Scans a directory recursively for media files.
 /// Returns basic MediaItems without probed metadata (fast).
@@ -86,6 +112,13 @@ pub fn scan_directory(dir: &Path) -> Vec<MediaItem> {
 fn scan_recursive(dir: &Path, out: &mut Vec<MediaItem>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
+        // Use DirEntry::file_type() — no extra stat(), uses the type already
+        // returned by readdir(3). Falls back to skip on error.
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+
         let path = entry.path();
 
         // Skip hidden entries (names starting with '.').
@@ -93,17 +126,29 @@ fn scan_recursive(dir: &Path, out: &mut Vec<MediaItem>) {
             Some(n) => n,
             None => continue,
         };
-        if name.starts_with('.') {
+        // Skip hidden entries and known non-media directories.
+        if name.starts_with('.') || SKIP_DIRS.contains(&name) {
             continue;
         }
 
-        if path.is_dir() {
+        if file_type.is_dir() {
             scan_recursive(&path, out);
             continue;
         }
 
-        // Only process regular files — skip symlinks, device nodes, pipes, etc.
-        if !path.is_file() {
+        // Only process plain regular files.
+        // Rejects symlinks, device nodes, named pipes, sockets, etc.
+        if !file_type.is_file() {
+            continue;
+        }
+
+        // path.extension() only returns the LAST segment after a dot.
+        // For multi-extension files like "foo.d.ts", extension() = "ts" but
+        // the full file_name is "foo.d.ts". We check the full name to catch
+        // TypeScript declaration files, source maps, and other code artifacts
+        // that would otherwise match media extensions.
+        let file_name_lower = name.to_lowercase();
+        if is_code_artifact(&file_name_lower) {
             continue;
         }
 

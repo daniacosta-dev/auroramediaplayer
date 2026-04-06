@@ -319,3 +319,75 @@ label.playlist-duration {
     border-radius: 9999px;
     background-color: alpha(@window_fg_color, 0.06);
 }
+
+
+/* ── Library cards ──────────────────────────────────────────────────────────── */
+
+/* Strip the default FlowBoxChild focus/selection chrome */
+.library-card-child {
+    background: none;
+    border-radius: 12px;
+    padding: 0;
+}
+
+.library-card-child:focus {
+    outline: 2px solid @accent_color;
+    outline-offset: 2px;
+}
+
+/* Card container */
+.library-card {
+    border-radius: 12px;
+    background-color: @card_bg_color;
+    border: 1px solid alpha(@window_fg_color, 0.07);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    transition: box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.library-card:hover {
+    background-color: mix(@card_bg_color, @window_fg_color, 0.04);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+/* Title: slightly bold, full contrast */
+.library-card-title {
+    font-weight: 600;
+    font-size: 0.85em;
+}
+
+/* Subtitle inherits dim-label opacity from libadwaita */
+.library-card-subtitle {
+    font-size: 0.78em;
+}
+
+/* Shared badge base: dark pill */
+.library-badge {
+    background-color: rgba(0, 0, 0, 0.72);
+    border-radius: 5px;
+    padding: 2px 5px;
+    font-size: 0.72em;
+    font-weight: 700;
+    color: white;
+}
+
+/* Duration badge: warm yellow text */
+.library-badge-duration {
+    color: #f8d070;
+}
+
+/* Resolution badge: accent-colored background */
+.library-badge-res {
+    background-color: @accent_color;
+    color: @accent_fg_color;
+    font-size: 0.68em;
+}
+
+/* Placeholder when there is no thumbnail */
+.library-card-placeholder {
+    background: linear-gradient(
+        135deg,
+        alpha(@window_fg_color, 0.04) 0%,
+        alpha(@accent_color, 0.06) 100%
+    );
+    border-radius: 11px 11px 0 0;
+}

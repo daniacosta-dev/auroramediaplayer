@@ -19,7 +19,11 @@ impl LibraryStore {
     pub fn load() -> Self {
         let Some(path) = Self::store_path() else { return Self::default() };
         let Ok(data) = std::fs::read_to_string(&path) else { return Self::default() };
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut store: Self = serde_json::from_str(&data).unwrap_or_default();
+        // Drop items whose files no longer exist on disk — covers renamed/deleted
+        // files and stale entries from previous scanner bugs (e.g. .d nodes).
+        store.items.retain(|item| item.path.is_file());
+        store
     }
 
     /// Persist the current state to disk.
@@ -75,6 +79,16 @@ impl LibraryStore {
                 item.date_added     = existing.date_added; // keep original add date
                 item.last_played    = existing.last_played;
                 item.play_count     = existing.play_count;
+            }
+        }
+
+        // Clear thumbnail paths that no longer exist on disk so they get
+        // re-extracted on the next probe pass.
+        for item in &mut fresh {
+            if let Some(p) = &item.thumbnail_path {
+                if !p.exists() {
+                    item.thumbnail_path = None;
+                }
             }
         }
 
