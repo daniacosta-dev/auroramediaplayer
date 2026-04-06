@@ -46,7 +46,9 @@ pub struct MpvSnapshot {
     pub uploader:  Option<String>, // yt-dlp uploader / channel name
     /// HDR format string when content is HDR, None when SDR.
     /// Values: "HDR10" (BT.2020 + PQ), "HLG" (BT.2020 + HLG), "HDR" (generic BT.2020)
-    pub hdr_type:  Option<String>,
+    pub hdr_type:     Option<String>,
+    /// Actual decoded video height in pixels (from video-params/h), None when no video.
+    pub video_height: Option<i32>,
 }
 
 impl MpvSnapshot {
@@ -151,6 +153,7 @@ impl MpvPoller {
                            .or_else(|| self.get_str("metadata/by-key/Channel"))
                            .or_else(|| self.get_str("metadata/by-key/album_artist"))
                            .or_else(|| self.get_str("metadata/by-key/Album_Artist")),
+            video_height: self.get_i64("video-params/h").map(|h| h as i32),
             hdr_type:  {
                 let primaries = self.get_str("video-params/primaries").unwrap_or_default();
                 let gamma     = self.get_str("video-params/gamma").unwrap_or_default();
@@ -175,6 +178,18 @@ pub struct TrackInfo {
     pub title: Option<String>,
     pub lang: Option<String>,
     pub selected: bool,
+}
+
+/// Returns the path to the yt-dlp binary bundled for the current sandbox.
+/// None means yt-dlp is expected on PATH (development / distro installs).
+pub fn ytdl_path() -> Option<String> {
+    if let Ok(snap) = std::env::var("SNAP") {
+        Some(format!("{}/usr/bin/yt-dlp", snap))
+    } else if std::env::var("FLATPAK_ID").is_ok() {
+        Some("/app/bin/yt-dlp".to_string())
+    } else {
+        None
+    }
 }
 
 pub struct MpvPlayer {
@@ -216,16 +231,7 @@ impl MpvPlayer {
         mpv.set_property("tone-mapping", tone_mapping.as_str()).ok();
         // Point mpv to the bundled yt-dlp binary when running inside a sandbox
         // where PATH may not include the binary's location.
-        let ytdl_path = if let Ok(snap) = std::env::var("SNAP") {
-            // Snap: yt-dlp lives under $SNAP/usr/bin
-            Some(format!("{}/usr/bin/yt-dlp", snap))
-        } else if std::env::var("FLATPAK_ID").is_ok() {
-            // Flatpak: yt-dlp is bundled at /app/bin/yt-dlp
-            Some("/app/bin/yt-dlp".to_string())
-        } else {
-            None
-        };
-        if let Some(path) = ytdl_path {
+        if let Some(path) = ytdl_path() {
             let opts = format!("ytdl_hook-ytdl_path={}", path);
             mpv.set_property("script-opts", opts.as_str()).ok();
         }
@@ -330,6 +336,12 @@ impl MpvPlayer {
             PlayerCommand::AddSubtitle(path) => {
                 let path_str = path.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?;
                 mpv_command_array(self.mpv.ctx.as_ptr(), &["sub-add", path_str, "select"])?;
+            }
+            PlayerCommand::SetQuality { format, url, start_pos } => {
+                self.mpv.set_property("ytdl-format", format.as_str()).ok();
+                let start_opt = format!("start={}", start_pos as u64);
+                mpv_command_array(self.mpv.ctx.as_ptr(), &["loadfile", &url, "replace", &start_opt])?;
+                self.mpv.set_property("pause", false).ok();
             }
             PlayerCommand::SetRepeat(mode) => match mode {
                 RepeatMode::None => {

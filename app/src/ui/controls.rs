@@ -2,7 +2,7 @@ use std::rc::Rc;
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
-use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popover, DrawingArea, Overlay};
+use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popover, DrawingArea, Overlay, Spinner};
 #[allow(unused_imports)]
 use std::path::PathBuf;
 use gtk4::prelude::*;
@@ -10,6 +10,19 @@ use glib;
 use gio;
 
 use crate::i18n::t;
+
+/// What to show in the quality button / popover.
+#[derive(Clone, PartialEq)]
+pub enum QualityDisplay {
+    /// Not a URL — hide the button entirely.
+    Hidden,
+    /// yt-dlp is still fetching format info — show spinner.
+    Loading,
+    /// Live stream — show fixed quality presets.
+    Live,
+    /// VOD — show only these specific heights (sorted descending).
+    Vod(Vec<u32>),
+}
 use crate::state::SharedState;
 use crate::player::PlayerCommand;
 use crate::player::RepeatMode;
@@ -57,6 +70,17 @@ pub struct PlayerControls {
     /// True when playback reached EOF with no next track and no repeat active.
     /// The play button shows a "replay" icon and clicking it restarts playback.
     ended: Rc<Cell<bool>>,
+    quality_btn: Button,
+    quality_spinner: Spinner,
+    quality_popover: Popover,
+    /// Current URL being played — updated each tick so the click handler can read it.
+    quality_url: Rc<RefCell<Option<String>>>,
+    /// Current playback position — updated each tick for reload-from-position.
+    quality_pos: Rc<RefCell<f64>>,
+    /// Last selected ytdl-format string (default = bestvideo+bestaudio/best).
+    quality_selected_format: Rc<RefCell<String>>,
+    /// Last QualityDisplay passed to update_quality — used to skip unnecessary rebuilds.
+    last_quality: Rc<RefCell<QualityDisplay>>,
 }
 
 impl PlayerControls {
@@ -380,6 +404,32 @@ impl PlayerControls {
             speed_btn.connect_clicked(move |_| { sp_c.popup(); });
         }
 
+        // ── Quality button + popover ──────────────────────────────────────
+        let quality_btn = Button::builder()
+            .label("⚙")
+            .tooltip_text(t("Streaming quality"))
+            .css_classes(vec!["flat"])
+            .visible(false)
+            .build();
+        let quality_spinner = Spinner::builder()
+            .spinning(false)
+            .visible(false)
+            .width_request(16)
+            .height_request(16)
+            .build();
+        let quality_popover = Popover::new();
+        quality_popover.set_position(gtk4::PositionType::Top);
+        quality_popover.set_parent(&quality_btn);
+        {
+            let qp = quality_popover.clone();
+            quality_btn.connect_clicked(move |_| { qp.popup(); });
+        }
+        let quality_url: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let quality_pos: Rc<RefCell<f64>> = Rc::new(RefCell::new(0.0));
+        let quality_selected_format: Rc<RefCell<String>> =
+            Rc::new(RefCell::new("bestvideo+bestaudio/best".into()));
+        let last_quality: Rc<RefCell<QualityDisplay>> = Rc::new(RefCell::new(QualityDisplay::Hidden));
+
         // Pointer cursor on all interactive controls
         for w in [
             prev_btn.upcast_ref::<gtk::Widget>(),
@@ -393,6 +443,7 @@ impl PlayerControls {
             fullscreen_btn.upcast_ref(),
             speed_btn.upcast_ref(),
             tracks_btn.upcast_ref(),
+            quality_btn.upcast_ref(),
             seek_bar.upcast_ref(),
             vol_slider.upcast_ref(),
         ] {
@@ -598,6 +649,13 @@ impl PlayerControls {
             video_overlay_target,
             is_fixed,
             ended,
+            quality_btn,
+            quality_spinner,
+            quality_popover,
+            quality_url,
+            quality_pos,
+            quality_selected_format,
+            last_quality,
         };
         this.apply_layout("floating");
         this
@@ -608,7 +666,7 @@ impl PlayerControls {
 
         // Popovers are outside the controls widget's CSS tree so they need their
         // own class to pick up modern styling.
-        for pop in [&self.speed_popover, &self.tracks_popover] {
+        for pop in [&self.speed_popover, &self.tracks_popover, &self.quality_popover] {
             if mode == "modern" {
                 pop.add_css_class("popover-modern");
             } else {
@@ -655,6 +713,8 @@ impl PlayerControls {
             btn_row.append(&sp2);
             btn_row.append(&self.tracks_btn);
             btn_row.append(&self.speed_btn);
+            btn_row.append(&self.quality_btn);
+            btn_row.append(&self.quality_spinner);
             btn_row.append(&self.vol_btn);
             btn_row.append(&self.vol_slider);
             btn_row.append(&self.vol_label);
@@ -699,6 +759,8 @@ impl PlayerControls {
             btn_row.append(&self.screenshot_btn);
             btn_row.append(&self.tracks_btn);
             btn_row.append(&self.speed_btn);
+            btn_row.append(&self.quality_btn);
+            btn_row.append(&self.quality_spinner);
             btn_row.append(&self.vol_btn);
             btn_row.append(&self.vol_slider);
             btn_row.append(&self.vol_label);
@@ -746,6 +808,8 @@ impl PlayerControls {
                 .build();
             vol_box.append(&self.tracks_btn);
             vol_box.append(&self.speed_btn);
+            vol_box.append(&self.quality_btn);
+            vol_box.append(&self.quality_spinner);
             vol_box.append(&self.vol_btn);
             vol_box.append(&self.vol_slider);
             vol_box.append(&self.vol_label);
@@ -810,7 +874,7 @@ impl PlayerControls {
     /// Used by the auto-hide timer to prevent hiding the control bar while
     /// the user is navigating a dropdown.
     pub fn has_open_popover(&self) -> bool {
-        self.speed_popover.is_visible() || self.tracks_popover.is_visible()
+        self.speed_popover.is_visible() || self.tracks_popover.is_visible() || self.quality_popover.is_visible()
     }
 
     /// Called at ~50 ms — only updates the seek bar and time labels.
@@ -1043,6 +1107,150 @@ impl PlayerControls {
             self.chapter_overlay.queue_draw();
         }
     }
+
+    /// Called each tick with current quality state.
+    /// `url` — current playing URL (None = local file / idle).
+    /// `display` — what options to show.
+    /// `video_height` — actual decoded height from mpv (shown on the button label).
+    /// `pos` — current playback position for reload-from-position.
+    pub fn update_quality(
+        &self,
+        url: Option<&str>,
+        display: QualityDisplay,
+        video_height: Option<i32>,
+        pos: f64,
+        state: &crate::state::SharedState,
+    ) {
+        // Always keep pos fresh for the click handler.
+        *self.quality_pos.borrow_mut() = pos;
+        *self.quality_url.borrow_mut() = url.map(|s| s.to_owned());
+
+        match &display {
+            QualityDisplay::Hidden => {
+                self.quality_btn.set_visible(false);
+                self.quality_spinner.set_visible(false);
+                self.quality_spinner.set_spinning(false);
+            }
+            QualityDisplay::Loading => {
+                self.quality_btn.set_visible(false);
+                self.quality_spinner.set_visible(true);
+                self.quality_spinner.set_spinning(true);
+            }
+            QualityDisplay::Live | QualityDisplay::Vod(_) => {
+                self.quality_spinner.set_visible(false);
+                self.quality_spinner.set_spinning(false);
+                // Button label: show actual playing resolution when available, else selected preset
+                let selected = self.quality_selected_format.borrow().clone();
+                let label = if let Some(h) = video_height.filter(|&h| h > 0) {
+                    format!("{}p", h)
+                } else {
+                    quality_label_for_format(&selected)
+                };
+                self.quality_btn.set_label(&label);
+                self.quality_btn.set_visible(true);
+            }
+        }
+
+        // Skip popover rebuild when nothing changed.
+        if *self.last_quality.borrow() == display {
+            return;
+        }
+        *self.last_quality.borrow_mut() = display.clone();
+
+        let popover_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
+            .margin_top(4)
+            .margin_bottom(4)
+            .margin_start(4)
+            .margin_end(4)
+            .build();
+
+        let owned_options: Vec<(String, String)> = match &display {
+            QualityDisplay::Live => LIVE_PRESETS.iter()
+                .map(|(lbl, fmt)| (lbl.to_string(), fmt.to_string()))
+                .collect(),
+            QualityDisplay::Vod(heights) => {
+                let mut v = vec![("Best".to_string(), "bestvideo+bestaudio/best".to_string())];
+                for &h in heights {
+                    v.push((
+                        format!("{}p", h),
+                        format!("bestvideo[height<={}]+bestaudio/best[height<={}]/best", h, h),
+                    ));
+                }
+                v
+            }
+            _ => return,
+        };
+
+
+        let current_fmt = self.quality_selected_format.borrow().clone();
+        for (label, fmt) in owned_options {
+            let btn = gtk::Button::builder()
+                .label(&label)
+                .css_classes(vec!["flat"])
+                .build();
+            if fmt == current_fmt {
+                btn.add_css_class("toggle-active");
+            }
+            let fmt_c = fmt.clone();
+            let url_rc = self.quality_url.clone();
+            let pos_rc = self.quality_pos.clone();
+            let sel_rc = self.quality_selected_format.clone();
+            let lq_rc  = self.last_quality.clone();
+            let qbtn_w = self.quality_btn.downgrade();
+            let state_c = state.clone();
+            let popover_c = self.quality_popover.clone();
+            btn.connect_clicked(move |_| {
+                let url = match url_rc.borrow().clone() {
+                    Some(u) => u,
+                    None => return,
+                };
+                let pos = *pos_rc.borrow();
+                *sel_rc.borrow_mut() = fmt_c.clone();
+                // Force popover rebuild on next tick to update checkmarks.
+                *lq_rc.borrow_mut() = QualityDisplay::Hidden;
+                // Update button label optimistically.
+                if let Some(qb) = qbtn_w.upgrade() {
+                    qb.set_label(&quality_label_for_format(&fmt_c));
+                }
+                if let Some(p) = state_c.borrow().player.as_ref() {
+                    p.execute(crate::player::PlayerCommand::SetQuality {
+                        format: fmt_c.clone(),
+                        url,
+                        start_pos: pos,
+                    }).ok();
+                }
+                popover_c.popdown();
+            });
+            popover_box.append(&btn);
+        }
+        self.quality_popover.set_child(Some(&popover_box));
+    }
+}
+
+/// Fixed quality presets used for live streams.
+static LIVE_PRESETS: &[(&str, &str)] = &[
+    ("Best",  "bestvideo+bestaudio/best"),
+    ("1080p", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"),
+    ("720p",  "bestvideo[height<=720]+bestaudio/best[height<=720]/best"),
+    ("480p",  "bestvideo[height<=480]+bestaudio/best[height<=480]/best"),
+    ("360p",  "bestvideo[height<=360]+bestaudio/best[height<=360]/best"),
+];
+
+/// Returns a human-readable label for a ytdl-format string.
+fn quality_label_for_format(fmt: &str) -> String {
+    if fmt == "bestvideo+bestaudio/best" {
+        return "Best".into();
+    }
+    // Extract the height from patterns like "bestvideo[height<=1080]+..."
+    if let Some(start) = fmt.find("height<=") {
+        let rest = &fmt[start + 8..];
+        if let Some(end) = rest.find(']') {
+            return format!("{}p", &rest[..end]);
+        }
+    }
+    "Quality".into()
 }
 
 fn track_label(t: &crate::player::TrackInfo) -> String {

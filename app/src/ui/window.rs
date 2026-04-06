@@ -19,7 +19,7 @@ use crate::state::{PlayerState, SharedState};
 use super::{
     headerbar::MediaHeaderBar,
     video_area::VideoArea,
-    controls::PlayerControls,
+    controls::{PlayerControls, QualityDisplay},
     playlist::PlaylistPanel,
 };
 
@@ -287,6 +287,15 @@ impl MediaWindow {
                 std::thread::sleep(std::time::Duration::from_millis(80));
             });
         }
+
+        // ── Quality fetch state ───────────────────────────────────────────
+        // Shared between the yt-dlp background thread and the 200 ms GTK tick.
+        #[derive(Clone)]
+        struct QualityFetch {
+            url: String,
+            display: QualityDisplay,
+        }
+        let quality_fetch: Arc<Mutex<Option<QualityFetch>>> = Arc::new(Mutex::new(None));
 
         // ── Root window ───────────────────────────────────────────────────
         // In fixed mode the control bar (~95 px) is always visible, so the
@@ -1341,6 +1350,7 @@ impl MediaWindow {
         // Debounce volume/mute disk writes: only flush after N ticks of no further changes.
         let settings_save_cooldown = Rc::new(Cell::new(0u32));
         let snapshot_200 = snapshot.clone();
+        let quality_fetch_200 = quality_fetch.clone();
         let fallback_icon_uri = aurora_icon_uri();
         // Track the last file+duration key for which thumbnails were generated
         // to avoid re-running ffmpeg every 200 ms for the same file.
@@ -1350,7 +1360,8 @@ impl MediaWindow {
             let _tick_start = std::time::Instant::now();
             // Read mpv properties from the background-thread snapshot — no blocking IPC.
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, thumbnail, eof, buffering, seeking, snap_path, hdr_type) = {
+                 artist, album, thumbnail, eof, buffering, seeking, snap_path, hdr_type,
+                 snap_height) = {
                 let snap = match snapshot_200.lock() {
                     Ok(g) => g.clone(),
                     Err(_) => return glib::ControlFlow::Continue,
@@ -1374,7 +1385,8 @@ impl MediaWindow {
                  artist, snap.album.unwrap_or_default(),
                  thumbnail,
                  snap.eof, snap.buffering, snap.seeking,
-                 snap.path, snap.hdr_type)
+                 snap.path, snap.hdr_type,
+                 snap.video_height)
             };
             // Read Rust-side state (no mpv IPC — always fast).
             let (pending_seek, repeat_mode, shuffle, podcast_mode, has_prev, has_next) = {
@@ -1540,6 +1552,74 @@ impl MediaWindow {
                             std::sync::Arc::new(std::sync::Mutex::new(None))
                         );
                     }
+                }
+            }
+
+            // ── Streaming quality ───────────────────────────────────────
+            {
+                let is_url = snap_path.as_deref()
+                    .map(|p| p.starts_with("http://") || p.starts_with("https://"))
+                    .unwrap_or(false);
+
+                if !is_url || idle {
+                    // Local file or idle: hide quality button.
+                    controls_c.update_quality(None, QualityDisplay::Hidden, None, pos, &state_c);
+                } else {
+                    let current_url = snap_path.as_deref().unwrap_or("");
+                    // Check if we need to kick off a new fetch for this URL.
+                    let needs_fetch = {
+                        let qf = quality_fetch_200.lock().unwrap();
+                        qf.as_ref().map(|q| q.url != current_url).unwrap_or(true)
+                    };
+                    if needs_fetch {
+                        // Mark as loading and spawn yt-dlp.
+                        {
+                            let mut qf = quality_fetch_200.lock().unwrap();
+                            *qf = Some(QualityFetch {
+                                url: current_url.to_owned(),
+                                display: QualityDisplay::Loading,
+                            });
+                        }
+                        let qf_bg = quality_fetch_200.clone();
+                        let url_bg = current_url.to_owned();
+                        std::thread::spawn(move || {
+                            let ytdl = crate::player::mpv::ytdl_path()
+                                .unwrap_or_else(|| "yt-dlp".into());
+                            let output = std::process::Command::new(&ytdl)
+                                .args(["-J", "--flat-playlist", "--no-warnings", &url_bg])
+                                .output();
+                            let display = match output {
+                                Ok(out) if out.status.success() => {
+                                    parse_ytdlp_quality(&out.stdout)
+                                }
+                                _ => QualityDisplay::Live, // fallback to presets on error
+                            };
+                            if let Ok(mut qf) = qf_bg.lock() {
+                                // Only update if the URL hasn't changed while we were fetching.
+                                if qf.as_ref().map(|q| q.url == url_bg).unwrap_or(false) {
+                                    if let Some(ref mut q) = *qf {
+                                        q.display = display;
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    // Read current state to pass to controls.
+                    let (qurl, qdisplay) = {
+                        let qf = quality_fetch_200.lock().unwrap();
+                        match qf.as_ref() {
+                            Some(q) => (Some(q.url.clone()), q.display.clone()),
+                            None => (None, QualityDisplay::Loading),
+                        }
+                    };
+                    controls_c.update_quality(
+                        qurl.as_deref(),
+                        qdisplay,
+                        snap_height,
+                        pos,
+                        &state_c,
+                    );
                 }
             }
 
@@ -1876,6 +1956,48 @@ impl MediaWindow {
             p.execute(PlayerCommand::Open(path.to_path_buf())).ok();
         }
     }
+}
+
+/// Parse yt-dlp JSON output and return the appropriate QualityDisplay.
+/// Falls back to Live presets on any parse error.
+fn parse_ytdlp_quality(json_bytes: &[u8]) -> QualityDisplay {
+    let Ok(text) = std::str::from_utf8(json_bytes) else {
+        return QualityDisplay::Live;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
+        return QualityDisplay::Live;
+    };
+
+    // If yt-dlp says it's live, use fixed presets.
+    let is_live = val.get("is_live").and_then(|v| v.as_bool()).unwrap_or(false);
+    if is_live {
+        return QualityDisplay::Live;
+    }
+
+    // Extract unique heights from the formats array, deduplicated and sorted descending.
+    let mut heights: Vec<u32> = val.get("formats")
+        .and_then(|f| f.as_array())
+        .map(|formats| {
+            formats.iter()
+                .filter_map(|f| {
+                    // Skip audio-only formats
+                    let vcodec = f.get("vcodec").and_then(|v| v.as_str()).unwrap_or("");
+                    if vcodec == "none" { return None; }
+                    f.get("height").and_then(|h| h.as_u64()).map(|h| h as u32)
+                })
+                .filter(|&h| h > 0)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    heights.sort_unstable_by(|a, b| b.cmp(a));
+    heights.dedup();
+
+    if heights.is_empty() {
+        return QualityDisplay::Live;
+    }
+
+    QualityDisplay::Vod(heights)
 }
 
 /// Extracts a YouTube thumbnail `https://` URL from a YouTube video URL.
