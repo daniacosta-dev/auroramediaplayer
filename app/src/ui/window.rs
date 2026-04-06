@@ -1697,6 +1697,13 @@ impl MediaWindow {
                             if !path_str.starts_with("http://") && !path_str.starts_with("https://") {
                                 return None;
                             }
+                            // Guard: only update when mpv is actually playing this item.
+                            // During source transitions, media-title still holds the previous
+                            // media's title while the new URL loads — without this check that
+                            // stale title would overwrite the placeholder and get stuck there.
+                            if snap_path.as_deref() != Some(path_str.as_ref()) {
+                                return None;
+                            }
                             let fallback = title_for_path(p);
                             playlist_c.item_title(idx).map(|t| {
                                 // Still a placeholder if:
