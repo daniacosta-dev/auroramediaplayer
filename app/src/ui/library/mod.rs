@@ -11,7 +11,7 @@ use gtk4::{self as gtk, Button, Label};
 use gtk4::prelude::*;
 
 use crate::i18n::t;
-use crate::library::{LibraryStore, metadata::probe_batch_async};
+use crate::library::{LibraryStore, Playlist, metadata::probe_batch_async};
 use crate::state::SharedState;
 
 pub use sidebar::LibrarySidebar;
@@ -59,12 +59,13 @@ impl LibraryView {
         // ── HeaderBar ─────────────────────────────────────────────────────
         let headerbar = HeaderBar::new();
 
-        // "Now Playing" pill button — start/end with icon + label
+        // "Now Playing" compact button — hidden until media is playing.
         let now_playing_btn = Button::builder()
             .tooltip_text(t("Back to player"))
             .visible(false)
-            .css_classes(vec!["suggested-action", "pill"])
+            .css_classes(vec!["suggested-action"])
             .build();
+        now_playing_btn.set_cursor_from_name(Some("pointer"));
 
         let btn_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -80,11 +81,13 @@ impl LibraryView {
             .icon_name("view-refresh-symbolic")
             .tooltip_text(t("Scan folders"))
             .build();
+        scan_btn.set_cursor_from_name(Some("pointer"));
 
         let add_btn = Button::builder()
             .icon_name("folder-new-symbolic")
             .tooltip_text(t("Add folder"))
             .build();
+        add_btn.set_cursor_from_name(Some("pointer"));
 
         headerbar.pack_start(&now_playing_btn);
         headerbar.pack_end(&scan_btn);
@@ -102,11 +105,21 @@ impl LibraryView {
             .child(&toolbar)
             .build();
 
-        // ── Sidebar → grid filter ─────────────────────────────────────────
+        // ── Sidebar → grid filter / playlist ─────────────────────────────────
         {
             let grid_c = grid.clone_ref();
+            let store_c = store.clone();
             sidebar.connect_filter_changed(move |filter| {
-                grid_c.apply_filter(&filter);
+                if let Some(id) = filter.strip_prefix("playlist:") {
+                    let store = store_c.borrow();
+                    if let Some(pl) = store.playlists.iter().find(|p| p.id == id) {
+                        let paths = pl.paths.clone();
+                        drop(store);
+                        grid_c.apply_playlist_filter(paths);
+                    }
+                } else if matches!(filter.as_str(), "all" | "video" | "audio") {
+                    grid_c.apply_filter(&filter);
+                }
             });
         }
 
@@ -121,6 +134,68 @@ impl LibraryView {
                 s.save();
                 sidebar_c.update_folders(s.watched_folders.clone());
                 grid_c.show_items(s.items.clone());
+            });
+        }
+
+        // ── Grid → add to existing playlist ──────────────────────────────────
+        {
+            let store_c = store.clone();
+            grid.connect_add_to_playlist(move |path, playlist_id| {
+                let mut s = store_c.borrow_mut();
+                s.add_to_playlist(&playlist_id, path);
+                s.save();
+            });
+        }
+
+        // ── Grid → new playlist dialog (via right-click on card) ─────────────
+        {
+            let store_c = store.clone();
+            let grid_c = grid.clone_ref();
+            let sidebar_c = sidebar.clone_ref();
+            let page_c = page.clone();
+            grid.connect_new_playlist(move |path| {
+                show_new_playlist_dialog(
+                    &page_c,
+                    Some(path),
+                    store_c.clone(),
+                    grid_c.clone_ref(),
+                    sidebar_c.clone_ref(),
+                );
+            });
+        }
+
+        // ── Sidebar "+" → new empty playlist ─────────────────────────────────
+        {
+            let store_c = store.clone();
+            let grid_c = grid.clone_ref();
+            let sidebar_c = sidebar.clone_ref();
+            let page_c = page.clone();
+            sidebar.connect_new_playlist(move || {
+                show_new_playlist_dialog(
+                    &page_c,
+                    None,
+                    store_c.clone(),
+                    grid_c.clone_ref(),
+                    sidebar_c.clone_ref(),
+                );
+            });
+        }
+
+        // ── Sidebar → delete playlist ─────────────────────────────────────────
+        {
+            let store_c = store.clone();
+            let grid_c = grid.clone_ref();
+            let sidebar_c = sidebar.clone_ref();
+            sidebar.connect_delete_playlist(move |playlist_id| {
+                let mut s = store_c.borrow_mut();
+                s.delete_playlist(&playlist_id);
+                s.save();
+                let playlists = s.playlists.clone();
+                drop(s);
+                sidebar_c.update_playlists(playlists.clone());
+                grid_c.set_playlists(playlists);
+                // Reset view in case the deleted playlist was active.
+                grid_c.apply_filter("all");
             });
         }
 
@@ -197,35 +272,25 @@ impl LibraryView {
         *self.on_now_playing.borrow_mut() = Some(std::boxed::Box::new(f));
     }
 
-    /// Show or hide the "Now Playing" button and update the track title.
+    /// Show or hide the "Now Playing" button.  The label stays fixed as
+    /// "Now Playing"; the track title is shown in the tooltip only.
     pub fn set_now_playing(&self, active: bool, title: &str) {
         self.now_playing_btn.set_visible(active);
-        if active && !title.is_empty() {
-            if let Some(btn_box) = self.now_playing_btn.child()
-                .and_then(|w| w.downcast::<gtk::Box>().ok())
-            {
-                // Second child of btn_box is the Label
-                let mut child = btn_box.first_child();
-                while let Some(c) = child {
-                    if let Ok(lbl) = c.clone().downcast::<Label>() {
-                        // Truncate long titles to keep the button compact
-                        let display = if title.chars().count() > 30 {
-                            format!("{}…", title.chars().take(30).collect::<String>())
-                        } else {
-                            title.to_string()
-                        };
-                        lbl.set_label(&display);
-                        break;
-                    }
-                    child = c.next_sibling();
-                }
-            }
+        if active {
+            let tip = if title.is_empty() {
+                t("Back to player").to_string()
+            } else {
+                format!("{} — {}", t("Now Playing"), title)
+            };
+            self.now_playing_btn.set_tooltip_text(Some(&tip));
         }
     }
 
     pub fn reload_from_store(&self) {
         let s = self.store.borrow();
         self.sidebar.update_folders(s.watched_folders.clone());
+        self.sidebar.update_playlists(s.playlists.clone());
+        self.grid.set_playlists(s.playlists.clone());
         self.grid.show_items(s.items.clone());
         drop(s);
         probe_unprobed(&self.store, &self.grid);
@@ -252,6 +317,51 @@ impl LibraryView {
     pub fn store(&self) -> Rc<RefCell<LibraryStore>> {
         self.store.clone()
     }
+}
+
+// ── New playlist dialog ───────────────────────────────────────────────────────
+
+/// Show the "New Playlist" dialog.
+/// If `initial_path` is Some, the item is added to the new playlist on confirm.
+/// If None, an empty playlist is created (entry point from the sidebar "+" button).
+fn show_new_playlist_dialog(
+    parent: &impl gtk4::prelude::IsA<gtk4::Widget>,
+    initial_path: Option<PathBuf>,
+    store: std::rc::Rc<std::cell::RefCell<LibraryStore>>,
+    grid: MediaGrid,
+    sidebar: LibrarySidebar,
+) {
+    let dialog = adw::AlertDialog::new(Some(&t("New Playlist")), None::<&str>);
+    dialog.add_response("cancel", &t("Cancel"));
+    dialog.add_response("create", &t("Create"));
+    dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("create"));
+    dialog.set_close_response("cancel");
+
+    let entry = gtk::Entry::builder()
+        .placeholder_text(t("Playlist name"))
+        .activates_default(true)
+        .margin_top(12)
+        .build();
+    dialog.set_extra_child(Some(&entry));
+
+    dialog.connect_response(None, move |_, response| {
+        if response != "create" { return; }
+        let name = entry.text().trim().to_string();
+        if name.is_empty() { return; }
+        let mut s = store.borrow_mut();
+        let id = s.create_playlist(&name);
+        if let Some(ref path) = initial_path {
+            s.add_to_playlist(&id, path.clone());
+        }
+        s.save();
+        let playlists = s.playlists.clone();
+        drop(s);
+        grid.set_playlists(playlists.clone());
+        sidebar.update_playlists(playlists);
+    });
+
+    dialog.present(parent);
 }
 
 // ── Background metadata probe ─────────────────────────────────────────────────

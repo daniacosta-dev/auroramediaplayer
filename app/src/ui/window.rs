@@ -692,6 +692,7 @@ impl MediaWindow {
             .icon_name("go-home-symbolic")
             .tooltip_text(crate::i18n::t("Library"))
             .build();
+        library_btn.set_cursor_from_name(Some("pointer"));
         header.widget().pack_start(&library_btn);
         {
             let stack_w = main_stack.downgrade();

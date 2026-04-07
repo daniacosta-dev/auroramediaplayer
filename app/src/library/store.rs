@@ -3,10 +3,23 @@ use serde::{Deserialize, Serialize};
 
 use super::scanner::{scan_directory, MediaItem};
 
+// ── Playlist ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    pub paths: Vec<PathBuf>,
+}
+
+// ── LibraryStore ──────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LibraryStore {
     pub watched_folders: Vec<PathBuf>,
     pub items: Vec<MediaItem>,
+    #[serde(default)]
+    pub playlists: Vec<Playlist>,
 }
 
 impl LibraryStore {
@@ -93,6 +106,38 @@ impl LibraryStore {
         }
 
         self.items = fresh;
+    }
+
+    // ── Playlist management ───────────────────────────────────────────────────
+
+    /// Create a new empty playlist with the given name and return its ID.
+    pub fn create_playlist(&mut self, name: &str) -> String {
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis().to_string())
+            .unwrap_or_else(|_| self.playlists.len().to_string());
+        self.playlists.push(Playlist {
+            id: id.clone(),
+            name: name.to_string(),
+            paths: Vec::new(),
+        });
+        id
+    }
+
+    /// Add a path to a playlist. Returns false if already present or playlist not found.
+    pub fn add_to_playlist(&mut self, id: &str, path: PathBuf) -> bool {
+        if let Some(pl) = self.playlists.iter_mut().find(|p| p.id == id) {
+            if !pl.paths.contains(&path) {
+                pl.paths.push(path);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Delete a playlist by ID.
+    pub fn delete_playlist(&mut self, id: &str) {
+        self.playlists.retain(|p| p.id != id);
     }
 
     /// Record a play event for the given path.
