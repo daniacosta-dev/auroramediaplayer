@@ -60,10 +60,17 @@ impl LibraryStore {
         true
     }
 
-    /// Remove a folder and all items sourced from it.
+    /// Remove a folder, all items sourced from it, and any playlist entries
+    /// that pointed to files inside it.
     pub fn remove_folder(&mut self, folder: &Path) {
         self.watched_folders.retain(|f| f != folder);
         self.items.retain(|item| !item.path.starts_with(folder));
+        // Keep only playlist paths that are still tracked in the library.
+        let valid: std::collections::HashSet<&std::path::Path> =
+            self.items.iter().map(|i| i.path.as_path()).collect();
+        for pl in &mut self.playlists {
+            pl.paths.retain(|p| valid.contains(p.as_path()));
+        }
     }
 
     /// Scan all watched folders and merge results.

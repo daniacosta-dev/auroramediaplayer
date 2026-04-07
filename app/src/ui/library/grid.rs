@@ -7,6 +7,7 @@ use adw::prelude::*;
 use adw::NavigationPage;
 use gtk4::{self as gtk, FlowBox, FlowBoxChild, Label, ScrolledWindow,
            Orientation, Align, SelectionMode};
+use gtk4::glib;
 use gtk4::prelude::*;
 
 use crate::i18n::t;
@@ -24,6 +25,12 @@ const SORT_TITLE: u8           = 0;
 const SORT_DATE_ADDED: u8      = 1;
 const SORT_RECENTLY_PLAYED: u8 = 2;
 const SORT_DURATION: u8        = 3;
+
+// ── View-stack page names ─────────────────────────────────────────────────────
+
+const PAGE_ITEMS:          &str = "items";
+const PAGE_EMPTY_LIBRARY:  &str = "empty-library";
+const PAGE_EMPTY_RESULTS:  &str = "empty-results";
 
 // ── Widget-name encoding ──────────────────────────────────────────────────────
 //
@@ -51,28 +58,31 @@ pub struct MediaGrid {
 }
 
 struct GridInner {
-    page:             NavigationPage,
-    flow:             FlowBox,
-    filter_kind:      Rc<Cell<u8>>,
-    filter_playlist:  Rc<RefCell<Option<HashSet<PathBuf>>>>,
-    filter_search:    Rc<RefCell<String>>,
-    sort_order:       Rc<Cell<u8>>,
-    now_playing_path: Rc<RefCell<Option<PathBuf>>>,
-    items:            Rc<RefCell<Vec<MediaItem>>>,
-    playlists:        RefCell<Vec<Playlist>>,
-    on_activated:     RefCell<Option<Box<dyn Fn(PathBuf)>>>,
+    page:               NavigationPage,
+    flow:               FlowBox,
+    view_stack:         gtk::Stack,
+    filter_kind:        Rc<Cell<u8>>,
+    filter_playlist:    Rc<RefCell<Option<HashSet<PathBuf>>>>,
+    filter_search:      Rc<RefCell<String>>,
+    filter_recent_only: Rc<Cell<bool>>,
+    sort_order:         Rc<Cell<u8>>,
+    now_playing_path:   Rc<RefCell<Option<PathBuf>>>,
+    items:              Rc<RefCell<Vec<MediaItem>>>,
+    playlists:          RefCell<Vec<Playlist>>,
+    on_activated:       RefCell<Option<Box<dyn Fn(PathBuf)>>>,
     on_add_to_playlist: RefCell<Option<Box<dyn Fn(PathBuf, String)>>>,
-    on_new_playlist:  RefCell<Option<Box<dyn Fn(PathBuf)>>>,
+    on_new_playlist:    RefCell<Option<Box<dyn Fn(PathBuf)>>>,
 }
 
 impl MediaGrid {
     pub fn new() -> Self {
-        let filter_kind     = Rc::new(Cell::new(FILTER_ALL));
-        let filter_playlist = Rc::new(RefCell::new(None::<HashSet<PathBuf>>));
-        let filter_search   = Rc::new(RefCell::new(String::new()));
-        let sort_order      = Rc::new(Cell::new(SORT_TITLE));
-        let now_playing_path = Rc::new(RefCell::new(None::<PathBuf>));
-        let items           = Rc::new(RefCell::new(Vec::<MediaItem>::new()));
+        let filter_kind        = Rc::new(Cell::new(FILTER_ALL));
+        let filter_playlist    = Rc::new(RefCell::new(None::<HashSet<PathBuf>>));
+        let filter_search      = Rc::new(RefCell::new(String::new()));
+        let filter_recent_only = Rc::new(Cell::new(false));
+        let sort_order         = Rc::new(Cell::new(SORT_TITLE));
+        let now_playing_path   = Rc::new(RefCell::new(None::<PathBuf>));
+        let items              = Rc::new(RefCell::new(Vec::<MediaItem>::new()));
 
         let flow = FlowBox::builder()
             .valign(Align::Start)
@@ -87,18 +97,22 @@ impl MediaGrid {
             .margin_bottom(16)
             .build();
 
-        // ── Filter: kind + playlist + search ─────────────────────────────
+        // ── Filter: kind + playlist + search + recent ────────────────────
         // Uses the original insertion index stored in widget_name — NOT child.index(),
         // which reflects visual (sorted) position and maps to the wrong item.
         {
             let fk = filter_kind.clone();
             let fp = filter_playlist.clone();
             let fs = filter_search.clone();
+            let fr = filter_recent_only.clone();
             let items_f = items.clone();
             flow.set_filter_func(move |child| {
                 let _wn = child.widget_name(); let (kind, idx) = decode_name(&_wn);
                 let items = items_f.borrow();
                 let Some(item) = items.get(idx) else { return false };
+
+                // Recently-played filter.
+                if fr.get() && item.last_played.is_none() { return false; }
 
                 // Playlist filter.
                 if let Some(paths) = fp.borrow().as_ref() {
@@ -222,8 +236,27 @@ impl MediaGrid {
         let content_box = gtk::Box::builder()
             .orientation(Orientation::Vertical)
             .build();
+        // ── View stack: grid / empty states ──────────────────────────────
+        let view_stack = gtk::Stack::new();
+        view_stack.set_vexpand(true);
+        view_stack.add_named(&scroll, Some(PAGE_ITEMS));
+
+        let empty_library = adw::StatusPage::builder()
+            .icon_name("folder-music-symbolic")
+            .title(t("No media yet"))
+            .description(t("Add a folder using the button above to get started."))
+            .build();
+        view_stack.add_named(&empty_library, Some(PAGE_EMPTY_LIBRARY));
+
+        let empty_results = adw::StatusPage::builder()
+            .icon_name("system-search-symbolic")
+            .title(t("No results"))
+            .description(t("Try a different search or filter."))
+            .build();
+        view_stack.add_named(&empty_results, Some(PAGE_EMPTY_RESULTS));
+
         content_box.append(&toolbar_row);
-        content_box.append(&scroll);
+        content_box.append(&view_stack);
 
         let page = NavigationPage::builder()
             .title(t("All Media"))
@@ -234,9 +267,11 @@ impl MediaGrid {
         let inner = Rc::new(GridInner {
             page,
             flow,
+            view_stack,
             filter_kind,
             filter_playlist,
             filter_search,
+            filter_recent_only,
             sort_order,
             now_playing_path,
             items,
@@ -266,6 +301,7 @@ impl MediaGrid {
             move |entry| {
                 *inner_c.filter_search.borrow_mut() = entry.text().to_string();
                 inner_c.flow.invalidate_filter();
+                schedule_empty_state_update(inner_c.clone());
             }
         });
 
@@ -307,9 +343,11 @@ impl MediaGrid {
         }
         *self.inner.items.borrow_mut() = items_vec;
         self.inner.filter_kind.set(FILTER_ALL);
+        self.inner.filter_recent_only.set(false);
         *self.inner.filter_playlist.borrow_mut() = None;
         self.inner.flow.invalidate_filter();
         self.inner.flow.invalidate_sort();
+        schedule_empty_state_update(self.inner.clone());
     }
 
     /// Update one card's thumbnail after async probe completes.
@@ -356,8 +394,10 @@ impl MediaGrid {
             _       => FILTER_ALL,
         };
         self.inner.filter_kind.set(kind);
+        self.inner.filter_recent_only.set(false);
         *self.inner.filter_playlist.borrow_mut() = None;
         self.inner.flow.invalidate_filter();
+        schedule_empty_state_update(self.inner.clone());
     }
 
     /// Show only items in the given playlist.
@@ -365,7 +405,35 @@ impl MediaGrid {
         let set: HashSet<PathBuf> = paths.into_iter().collect();
         *self.inner.filter_playlist.borrow_mut() = Some(set);
         self.inner.filter_kind.set(FILTER_ALL);
+        self.inner.filter_recent_only.set(false);
         self.inner.flow.invalidate_filter();
+        schedule_empty_state_update(self.inner.clone());
+    }
+
+    /// Show only items that have been played, sorted by most-recently-played.
+    pub fn apply_recent_filter(&self) {
+        self.inner.filter_recent_only.set(true);
+        self.inner.filter_kind.set(FILTER_ALL);
+        *self.inner.filter_playlist.borrow_mut() = None;
+        self.inner.sort_order.set(SORT_RECENTLY_PLAYED);
+        self.inner.flow.invalidate_filter();
+        self.inner.flow.invalidate_sort();
+        schedule_empty_state_update(self.inner.clone());
+    }
+
+    /// Count of items that have ever been played (for the sidebar badge).
+    pub fn recent_count(&self) -> usize {
+        self.inner.items.borrow().iter().filter(|i| i.last_played.is_some()).count()
+    }
+
+    /// Sync play metadata for one item so the "Recently Played" filter sees it.
+    /// Called after `record_play` updates the store.
+    pub fn sync_play_data(&self, path: &std::path::Path, last_played: Option<u64>, play_count: u32) {
+        let mut items = self.inner.items.borrow_mut();
+        if let Some(item) = items.iter_mut().find(|i| i.path == path) {
+            item.last_played = last_played;
+            item.play_count  = play_count;
+        }
     }
 
     /// Highlight the card for the given path; clear all others.
@@ -389,6 +457,45 @@ impl MediaGrid {
             child_opt = child.next_sibling();
         }
     }
+}
+
+// ── Empty-state management ────────────────────────────────────────────────────
+
+/// Schedule an idle callback that picks the right view-stack page.
+/// Using idle avoids checking before GTK has applied the filter pass.
+fn schedule_empty_state_update(inner: Rc<GridInner>) {
+    glib::idle_add_local_once(move || {
+        let items = inner.items.borrow();
+        let page = if items.is_empty() {
+            PAGE_EMPTY_LIBRARY
+        } else {
+            // Count items that pass the current filters.
+            let fk = inner.filter_kind.get();
+            let fr = inner.filter_recent_only.get();
+            let fs = inner.filter_search.borrow().to_lowercase();
+            let fp = inner.filter_playlist.borrow();
+            let visible = items.iter().filter(|item| {
+                if fr && item.last_played.is_none() { return false; }
+                if let Some(paths) = fp.as_ref() {
+                    if !paths.contains(&item.path) { return false; }
+                }
+                match fk {
+                    FILTER_VIDEO => { if item.kind != MediaKind::Video { return false; } }
+                    FILTER_AUDIO => { if item.kind != MediaKind::Audio { return false; } }
+                    _ => {}
+                }
+                if !fs.is_empty() {
+                    let hit = item.title.to_lowercase().contains(fs.as_str())
+                        || item.artist.as_deref().map(|a| a.to_lowercase().contains(fs.as_str())).unwrap_or(false)
+                        || item.album.as_deref().map(|a| a.to_lowercase().contains(fs.as_str())).unwrap_or(false);
+                    if !hit { return false; }
+                }
+                true
+            }).count();
+            if visible == 0 { PAGE_EMPTY_RESULTS } else { PAGE_ITEMS }
+        };
+        inner.view_stack.set_visible_child_name(page);
+    });
 }
 
 // ── Sort helper ───────────────────────────────────────────────────────────────

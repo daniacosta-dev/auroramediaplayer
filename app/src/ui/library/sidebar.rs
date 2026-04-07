@@ -19,16 +19,21 @@ pub struct LibrarySidebar {
 }
 
 struct SidebarInner {
-    page: NavigationPage,
-    list: ListBox,
-    folder_rows: RefCell<Vec<(PathBuf, ListBoxRow)>>,
-    playlist_rows: RefCell<Vec<(String, ListBoxRow)>>,
-    /// Non-selectable "Playlists [+]" section header — repositioned on update.
-    playlist_header: ListBoxRow,
-    on_filter: RefCell<Option<Box<dyn Fn(String)>>>,
+    page:             NavigationPage,
+    list:             ListBox,
+    // Count labels for fixed category rows.
+    count_all:        Label,
+    count_video:      Label,
+    count_audio:      Label,
+    count_recent:     Label,
+    folder_rows:      RefCell<Vec<(PathBuf, ListBoxRow)>>,
+    playlist_rows:    RefCell<Vec<(String, ListBoxRow)>>,
+    playlist_header:  ListBoxRow,
+    on_filter:        RefCell<Option<Box<dyn Fn(String)>>>,
     on_remove_folder: RefCell<Option<Box<dyn Fn(PathBuf)>>>,
     on_delete_playlist: RefCell<Option<Box<dyn Fn(String)>>>,
-    on_new_playlist: RefCell<Option<Box<dyn Fn()>>>,
+    on_rename_playlist: RefCell<Option<Box<dyn Fn(String, String)>>>,
+    on_new_playlist:  RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl LibrarySidebar {
@@ -39,20 +44,21 @@ impl LibrarySidebar {
             .build();
 
         // ── Fixed category rows ───────────────────────────────────────────
-        let row_all   = make_nav_row("video-display-symbolic",   t("All Media"), "all");
-        let row_video = make_nav_row("video-x-generic-symbolic", t("Videos"),    "video");
-        let row_audio = make_nav_row("audio-x-generic-symbolic", t("Music"),     "audio");
+        let (row_all,    count_all)    = make_nav_row_with_count("video-display-symbolic",   t("All Media"), "all");
+        let (row_video,  count_video)  = make_nav_row_with_count("video-x-generic-symbolic", t("Videos"),    "video");
+        let (row_audio,  count_audio)  = make_nav_row_with_count("audio-x-generic-symbolic", t("Music"),     "audio");
+        let (row_recent, count_recent) = make_nav_row_with_count("media-playback-start-symbolic", t("Recently Played"), "recent");
 
         list.append(&row_all);
         list.append(&row_video);
         list.append(&row_audio);
+        list.append(&row_recent);
 
-        // ── "Folders" section header (always visible) ─────────────────────
+        // ── "Folders" section header ──────────────────────────────────────
         let folder_header = make_section_header(t("Folders"), None::<&gtk::Button>);
         list.append(&folder_header);
 
         // ── "Playlists [+]" section header ───────────────────────────────
-        // The "+" button is wired after `inner` is created (below).
         let add_btn = gtk::Button::builder()
             .icon_name("list-add-symbolic")
             .css_classes(vec!["flat", "circular"])
@@ -60,10 +66,7 @@ impl LibrarySidebar {
             .build();
         add_btn.set_size_request(22, 22);
         add_btn.set_cursor_from_name(Some("pointer"));
-
         let playlist_header = make_section_header(t("Playlists"), Some(&add_btn));
-        // Playlist header is appended by the first update_folders call; don't
-        // append it here to avoid double-insertion.
 
         let scroll = ScrolledWindow::builder()
             .vexpand(true)
@@ -82,16 +85,21 @@ impl LibrarySidebar {
         let inner = Rc::new(SidebarInner {
             page,
             list,
-            folder_rows: RefCell::new(Vec::new()),
-            playlist_rows: RefCell::new(Vec::new()),
+            count_all,
+            count_video,
+            count_audio,
+            count_recent,
+            folder_rows:      RefCell::new(Vec::new()),
+            playlist_rows:    RefCell::new(Vec::new()),
             playlist_header,
-            on_filter: RefCell::new(None),
-            on_remove_folder: RefCell::new(None),
+            on_filter:          RefCell::new(None),
+            on_remove_folder:   RefCell::new(None),
             on_delete_playlist: RefCell::new(None),
-            on_new_playlist: RefCell::new(None),
+            on_rename_playlist: RefCell::new(None),
+            on_new_playlist:    RefCell::new(None),
         });
 
-        // Wire row selection — emits the row's widget_name via on_filter.
+        // Wire row selection.
         inner.list.connect_row_selected({
             let inner_c = inner.clone();
             move |_, row| {
@@ -104,7 +112,7 @@ impl LibrarySidebar {
             }
         });
 
-        // Wire "+" button after inner is constructed.
+        // Wire "+" button.
         add_btn.connect_clicked({
             let inner_c = inner.clone();
             move |_| {
@@ -133,13 +141,25 @@ impl LibrarySidebar {
         *self.inner.on_delete_playlist.borrow_mut() = Some(Box::new(f));
     }
 
+    pub fn connect_rename_playlist<F: Fn(String, String) + 'static>(&self, f: F) {
+        *self.inner.on_rename_playlist.borrow_mut() = Some(Box::new(f));
+    }
+
     pub fn connect_new_playlist<F: Fn() + 'static>(&self, f: F) {
         *self.inner.on_new_playlist.borrow_mut() = Some(Box::new(f));
     }
 
-    /// Rebuild watched-folder rows.  Also repositions the playlist section.
-    pub fn update_folders(&self, folders: Vec<PathBuf>) {
-        // Detach the entire dynamic section so we can rebuild in order.
+    /// Update the counts shown next to the fixed category rows.
+    pub fn update_category_counts(&self, all: usize, video: usize, audio: usize, recent: usize) {
+        set_count_label(&self.inner.count_all,    all);
+        set_count_label(&self.inner.count_video,  video);
+        set_count_label(&self.inner.count_audio,  audio);
+        set_count_label(&self.inner.count_recent, recent);
+    }
+
+    /// Rebuild watched-folder rows with item counts.
+    /// `folders` is `(path, item_count)`.
+    pub fn update_folders(&self, folders: Vec<(PathBuf, usize)>) {
         for (_, row) in self.inner.folder_rows.borrow().iter() {
             self.inner.list.remove(row);
         }
@@ -148,46 +168,58 @@ impl LibrarySidebar {
             self.inner.list.remove(row);
         }
 
-        // Append new folder rows.
         let mut new_rows = Vec::new();
-        for folder in folders {
+        for (folder, count) in folders {
             let label = folder.file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("Folder")
                 .to_string();
-            let row = make_nav_row("folder-symbolic", &label, &folder.to_string_lossy());
+            let (row, count_lbl) =
+                make_nav_row_with_count("folder-symbolic", &label, &folder.to_string_lossy());
+            set_count_label(&count_lbl, count);
             attach_folder_context_menu(&row, folder.clone(), self.inner.clone());
             self.inner.list.append(&row);
             new_rows.push((folder, row));
         }
         *self.inner.folder_rows.borrow_mut() = new_rows;
 
-        // Re-append playlist section in correct order.
         self.inner.list.append(&self.inner.playlist_header);
         for (_, row) in self.inner.playlist_rows.borrow().iter() {
             self.inner.list.append(row);
         }
     }
 
-    /// Rebuild playlist rows (keeps playlist_header position stable).
+    /// Rebuild playlist rows, showing item counts.
     pub fn update_playlists(&self, playlists: Vec<Playlist>) {
-        // Detach playlist section temporarily.
         self.inner.list.remove(&self.inner.playlist_header);
         for (_, row) in self.inner.playlist_rows.borrow().iter() {
             self.inner.list.remove(row);
         }
 
-        // Re-append playlist section with new rows.
         self.inner.list.append(&self.inner.playlist_header);
         let mut new_rows = Vec::new();
         for pl in &playlists {
             let widget_name = format!("playlist:{}", pl.id);
-            let row = make_nav_row("view-list-symbolic", &pl.name, &widget_name);
-            attach_playlist_context_menu(&row, pl.id.clone(), self.inner.clone());
+            let (row, count_lbl) =
+                make_nav_row_with_count("view-list-symbolic", &pl.name, &widget_name);
+            let live = pl.paths.iter().filter(|p| p.is_file()).count();
+            set_count_label(&count_lbl, live);
+            attach_playlist_context_menu(&row, pl.id.clone(), pl.name.clone(), self.inner.clone());
             self.inner.list.append(&row);
             new_rows.push((pl.id.clone(), row));
         }
         *self.inner.playlist_rows.borrow_mut() = new_rows;
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn set_count_label(lbl: &Label, count: usize) {
+    if count > 0 {
+        lbl.set_label(&count.to_string());
+        lbl.set_visible(true);
+    } else {
+        lbl.set_visible(false);
     }
 }
 
@@ -224,7 +256,20 @@ fn attach_folder_context_menu(row: &ListBoxRow, folder: PathBuf, inner: Rc<Sideb
     attach_right_click_gesture(row, &popover);
 }
 
-fn attach_playlist_context_menu(row: &ListBoxRow, playlist_id: String, inner: Rc<SidebarInner>) {
+fn attach_playlist_context_menu(
+    row: &ListBoxRow,
+    playlist_id: String,
+    playlist_name: String,
+    inner: Rc<SidebarInner>,
+) {
+    // Rename button
+    let rename_btn = gtk::Button::builder()
+        .label(t("Rename…"))
+        .css_classes(vec!["flat"])
+        .halign(Align::Fill)
+        .build();
+
+    // Delete button
     let delete_btn = gtk::Button::builder()
         .label(t("Delete playlist"))
         .css_classes(vec!["flat", "destructive-action"])
@@ -235,7 +280,11 @@ fn attach_playlist_context_menu(row: &ListBoxRow, playlist_id: String, inner: Rc
         .orientation(Orientation::Vertical)
         .margin_top(4).margin_bottom(4)
         .margin_start(4).margin_end(4)
+        .spacing(2)
         .build();
+    popover_box.set_size_request(160, -1);
+    popover_box.append(&rename_btn);
+    popover_box.append(&gtk::Separator::new(Orientation::Horizontal));
     popover_box.append(&delete_btn);
 
     let popover = gtk::Popover::builder()
@@ -244,15 +293,67 @@ fn attach_playlist_context_menu(row: &ListBoxRow, playlist_id: String, inner: Rc
         .build();
     popover.set_parent(row);
 
-    let popover_c = popover.clone();
-    delete_btn.connect_clicked(move |_| {
-        popover_c.popdown();
-        if let Some(cb) = &*inner.on_delete_playlist.borrow() {
-            cb(playlist_id.clone());
+    // Rename action — show an AlertDialog to get the new name.
+    {
+        let inner_c = inner.clone();
+        let id_c    = playlist_id.clone();
+        let name_c  = playlist_name.clone();
+        let popover_c = popover.clone();
+        let row_c   = row.clone();
+        rename_btn.connect_clicked(move |_| {
+            popover_c.popdown();
+            show_rename_dialog(&row_c, id_c.clone(), name_c.clone(), inner_c.clone());
+        });
+    }
+
+    // Delete action.
+    {
+        let inner_c   = inner.clone();
+        let id_c      = playlist_id.clone();
+        let popover_c = popover.clone();
+        delete_btn.connect_clicked(move |_| {
+            popover_c.popdown();
+            if let Some(cb) = &*inner_c.on_delete_playlist.borrow() {
+                cb(id_c.clone());
+            }
+        });
+    }
+
+    attach_right_click_gesture(row, &popover);
+}
+
+fn show_rename_dialog(
+    parent: &impl gtk4::prelude::IsA<gtk4::Widget>,
+    playlist_id: String,
+    current_name: String,
+    inner: Rc<SidebarInner>,
+) {
+    let dialog = adw::AlertDialog::new(Some(&t("Rename Playlist")), None::<&str>);
+    dialog.add_response("cancel", &t("Cancel"));
+    dialog.add_response("rename", &t("Rename"));
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("rename"));
+    dialog.set_close_response("cancel");
+
+    let entry = gtk::Entry::builder()
+        .text(&current_name)
+        .activates_default(true)
+        .margin_top(12)
+        .build();
+    // Pre-select all text so the user can type the new name immediately.
+    entry.select_region(0, -1);
+    dialog.set_extra_child(Some(&entry));
+
+    dialog.connect_response(None, move |_, response| {
+        if response != "rename" { return; }
+        let new_name = entry.text().trim().to_string();
+        if new_name.is_empty() || new_name == current_name { return; }
+        if let Some(cb) = &*inner.on_rename_playlist.borrow() {
+            cb(playlist_id.clone(), new_name);
         }
     });
 
-    attach_right_click_gesture(row, &popover);
+    dialog.present(parent);
 }
 
 fn attach_right_click_gesture(row: &ListBoxRow, popover: &gtk::Popover) {
@@ -271,8 +372,9 @@ fn attach_right_click_gesture(row: &ListBoxRow, popover: &gtk::Popover) {
 
 // ── Row factories ─────────────────────────────────────────────────────────────
 
-/// Standard navigation row: icon + label, selectable.
-fn make_nav_row(icon: &str, label: &str, name: &str) -> ListBoxRow {
+/// Navigation row with a count badge on the right.
+/// Returns `(row, count_label)` — the count label starts hidden.
+fn make_nav_row_with_count(icon: &str, label: &str, name: &str) -> (ListBoxRow, Label) {
     let row_box = gtk::Box::builder()
         .orientation(Orientation::Horizontal)
         .spacing(10)
@@ -290,13 +392,21 @@ fn make_nav_row(icon: &str, label: &str, name: &str) -> ListBoxRow {
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
 
+    let count_lbl = Label::builder()
+        .halign(Align::End)
+        .css_classes(vec!["dim-label", "caption"])
+        .visible(false)
+        .build();
+
     row_box.append(&image);
     row_box.append(&lbl);
+    row_box.append(&count_lbl);
 
     let row = ListBoxRow::builder().child(&row_box).build();
     row.set_widget_name(name);
     row.set_cursor_from_name(Some("pointer"));
-    row
+
+    (row, count_lbl)
 }
 
 /// Non-selectable section header with an optional action button on the right.

@@ -1773,6 +1773,10 @@ impl MediaWindow {
                         let mut store = store_rc.borrow_mut();
                         store.record_play(path);
                         store.save();
+                        drop(store);
+                        // Sync the updated last_played into the grid's item cache
+                        // so the "Recently Played" filter can see it immediately.
+                        library_view_200.sync_play_data(path);
                     }
                     library_view_200.set_now_playing_path(path_opt);
                     *last = current;
