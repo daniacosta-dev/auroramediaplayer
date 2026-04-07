@@ -12,11 +12,36 @@ use gtk4::prelude::*;
 use crate::i18n::t;
 use crate::library::{MediaItem, MediaKind, Playlist};
 
-// ── Filter kind ───────────────────────────────────────────────────────────────
+// ── Filter constants ──────────────────────────────────────────────────────────
 
 const FILTER_ALL: u8   = 0;
 const FILTER_VIDEO: u8 = 1;
 const FILTER_AUDIO: u8 = 2;
+
+// ── Sort constants ────────────────────────────────────────────────────────────
+
+const SORT_TITLE: u8           = 0;
+const SORT_DATE_ADDED: u8      = 1;
+const SORT_RECENTLY_PLAYED: u8 = 2;
+const SORT_DURATION: u8        = 3;
+
+// ── Widget-name encoding ──────────────────────────────────────────────────────
+//
+// Each FlowBoxChild carries its ORIGINAL insertion index and kind encoded as
+// "<kind>:<idx>" in its widget_name.  This decouples look-ups from
+// `child.index()`, which changes whenever FlowBox re-sorts and therefore
+// cannot be used to index into the `items` Vec.
+
+fn encode_name(kind: &str, idx: usize) -> String {
+    format!("{kind}:{idx}")
+}
+
+fn decode_name(name: &str) -> (&str, usize) {
+    let mut parts = name.splitn(2, ':');
+    let kind = parts.next().unwrap_or("");
+    let idx  = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (kind, idx)
+}
 
 // ── MediaGrid ─────────────────────────────────────────────────────────────────
 
@@ -26,25 +51,28 @@ pub struct MediaGrid {
 }
 
 struct GridInner {
-    page: NavigationPage,
-    flow: FlowBox,
-    filter_kind: Rc<Cell<u8>>,
-    /// When Some, only show cards whose item path is in this set.
-    filter_playlist: Rc<RefCell<Option<HashSet<PathBuf>>>>,
-    /// Full ordered item list — matches FlowBox child order at all times.
-    items: Rc<RefCell<Vec<MediaItem>>>,
-    playlists: RefCell<Vec<Playlist>>,
-    on_activated: RefCell<Option<Box<dyn Fn(PathBuf)>>>,
+    page:             NavigationPage,
+    flow:             FlowBox,
+    filter_kind:      Rc<Cell<u8>>,
+    filter_playlist:  Rc<RefCell<Option<HashSet<PathBuf>>>>,
+    filter_search:    Rc<RefCell<String>>,
+    sort_order:       Rc<Cell<u8>>,
+    now_playing_path: Rc<RefCell<Option<PathBuf>>>,
+    items:            Rc<RefCell<Vec<MediaItem>>>,
+    playlists:        RefCell<Vec<Playlist>>,
+    on_activated:     RefCell<Option<Box<dyn Fn(PathBuf)>>>,
     on_add_to_playlist: RefCell<Option<Box<dyn Fn(PathBuf, String)>>>,
-    on_new_playlist: RefCell<Option<Box<dyn Fn(PathBuf)>>>,
+    on_new_playlist:  RefCell<Option<Box<dyn Fn(PathBuf)>>>,
 }
 
 impl MediaGrid {
     pub fn new() -> Self {
-        let filter_kind: Rc<Cell<u8>> = Rc::new(Cell::new(FILTER_ALL));
-        let filter_playlist: Rc<RefCell<Option<HashSet<PathBuf>>>> =
-            Rc::new(RefCell::new(None));
-        let items: Rc<RefCell<Vec<MediaItem>>> = Rc::new(RefCell::new(Vec::new()));
+        let filter_kind     = Rc::new(Cell::new(FILTER_ALL));
+        let filter_playlist = Rc::new(RefCell::new(None::<HashSet<PathBuf>>));
+        let filter_search   = Rc::new(RefCell::new(String::new()));
+        let sort_order      = Rc::new(Cell::new(SORT_TITLE));
+        let now_playing_path = Rc::new(RefCell::new(None::<PathBuf>));
+        let items           = Rc::new(RefCell::new(Vec::<MediaItem>::new()));
 
         let flow = FlowBox::builder()
             .valign(Align::Start)
@@ -59,28 +87,131 @@ impl MediaGrid {
             .margin_bottom(16)
             .build();
 
-        // Filter function installed once — reads both filters without rebuilding.
+        // ── Filter: kind + playlist + search ─────────────────────────────
+        // Uses the original insertion index stored in widget_name — NOT child.index(),
+        // which reflects visual (sorted) position and maps to the wrong item.
         {
             let fk = filter_kind.clone();
             let fp = filter_playlist.clone();
+            let fs = filter_search.clone();
             let items_f = items.clone();
             flow.set_filter_func(move |child| {
-                let idx = child.index() as usize;
-                // Playlist filter: hide items not in the active playlist.
+                let _wn = child.widget_name(); let (kind, idx) = decode_name(&_wn);
+                let items = items_f.borrow();
+                let Some(item) = items.get(idx) else { return false };
+
+                // Playlist filter.
                 if let Some(paths) = fp.borrow().as_ref() {
-                    match items_f.borrow().get(idx) {
-                        Some(item) if paths.contains(&item.path) => {}
-                        _ => return false,
-                    }
+                    if !paths.contains(&item.path) { return false; }
                 }
+
                 // Kind filter.
-                match fk.get() {
-                    FILTER_VIDEO => child.widget_name() == "video",
-                    FILTER_AUDIO => child.widget_name() == "audio",
-                    _            => true,
+                let kind_ok = match fk.get() {
+                    FILTER_VIDEO => kind == "video",
+                    FILTER_AUDIO => kind == "audio",
+                    _ => true,
+                };
+                if !kind_ok { return false; }
+
+                // Search filter (title / artist / album, case-insensitive).
+                let query = fs.borrow();
+                if !query.is_empty() {
+                    let q = query.to_lowercase();
+                    let hit = item.title.to_lowercase().contains(q.as_str())
+                        || item.artist.as_deref()
+                            .map(|a| a.to_lowercase().contains(q.as_str()))
+                            .unwrap_or(false)
+                        || item.album.as_deref()
+                            .map(|a| a.to_lowercase().contains(q.as_str()))
+                            .unwrap_or(false);
+                    if !hit { return false; }
+                }
+
+                true
+            });
+        }
+
+        // ── Sort ─────────────────────────────────────────────────────────
+        {
+            let so = sort_order.clone();
+            let items_s = items.clone();
+            flow.set_sort_func(move |a, b| {
+                let (_, ia) = decode_name(&a.widget_name());
+                let (_, ib) = decode_name(&b.widget_name());
+                let items = items_s.borrow();
+                match (items.get(ia), items.get(ib)) {
+                    (Some(a), Some(b)) => compare_items(a, b, so.get()),
+                    _ => gtk4::Ordering::Equal,
                 }
             });
         }
+
+        // ── Toolbar: search + sort ────────────────────────────────────────
+        let search_entry = gtk::SearchEntry::builder()
+            .placeholder_text(t("Search…"))
+            .hexpand(true)
+            .build();
+
+        let sort_popover = gtk::Popover::new();
+        let sort_box = gtk::Box::builder()
+            .orientation(Orientation::Vertical)
+            .margin_top(4).margin_bottom(4)
+            .margin_start(4).margin_end(4)
+            .spacing(2)
+            .build();
+        sort_box.set_size_request(180, -1);
+
+        let sort_entries: &[(u8, &str, &'static str)] = &[
+            (SORT_TITLE,           "view-sort-ascending-symbolic",    t("Title")),
+            (SORT_DATE_ADDED,      "document-open-recent-symbolic",   t("Date Added")),
+            (SORT_RECENTLY_PLAYED, "media-playback-start-symbolic",   t("Recently Played")),
+            (SORT_DURATION,        "preferences-system-time-symbolic", t("Duration")),
+        ];
+
+        for &(order, icon, label) in sort_entries {
+            let row = gtk::Box::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(8)
+                .build();
+            row.append(&gtk::Image::from_icon_name(icon));
+            row.append(&Label::builder()
+                .label(label)
+                .halign(Align::Start)
+                .hexpand(true)
+                .build());
+            let btn = gtk::Button::builder()
+                .child(&row)
+                .css_classes(vec!["flat"])
+                .build();
+            let so = sort_order.clone();
+            let flow_c = flow.clone();
+            let pw = sort_popover.downgrade();
+            btn.connect_clicked(move |_| {
+                so.set(order);
+                flow_c.invalidate_sort();
+                if let Some(p) = pw.upgrade() { p.popdown(); }
+            });
+            sort_box.append(&btn);
+        }
+        sort_popover.set_child(Some(&sort_box));
+
+        let sort_btn = gtk::MenuButton::builder()
+            .icon_name("view-sort-ascending-symbolic")
+            .tooltip_text(t("Sort by"))
+            .popover(&sort_popover)
+            .css_classes(vec!["flat"])
+            .build();
+
+        let toolbar_row = gtk::Box::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(6)
+            .margin_start(12)
+            .margin_end(6)
+            .margin_top(8)
+            .margin_bottom(0)
+            .build();
+        toolbar_row.append(&search_entry);
+        toolbar_row.append(&sort_btn);
 
         let scroll = ScrolledWindow::builder()
             .vexpand(true)
@@ -88,10 +219,16 @@ impl MediaGrid {
             .child(&flow)
             .build();
 
+        let content_box = gtk::Box::builder()
+            .orientation(Orientation::Vertical)
+            .build();
+        content_box.append(&toolbar_row);
+        content_box.append(&scroll);
+
         let page = NavigationPage::builder()
             .title(t("All Media"))
             .tag("library-grid")
-            .child(&scroll)
+            .child(&content_box)
             .build();
 
         let inner = Rc::new(GridInner {
@@ -99,23 +236,36 @@ impl MediaGrid {
             flow,
             filter_kind,
             filter_playlist,
+            filter_search,
+            sort_order,
+            now_playing_path,
             items,
-            playlists: RefCell::new(Vec::new()),
-            on_activated: RefCell::new(None),
+            playlists:          RefCell::new(Vec::new()),
+            on_activated:       RefCell::new(None),
             on_add_to_playlist: RefCell::new(None),
-            on_new_playlist: RefCell::new(None),
+            on_new_playlist:    RefCell::new(None),
         });
 
+        // Wire flow activation — decode original index from widget_name.
         inner.flow.connect_child_activated({
             let inner_c = inner.clone();
             move |_, child| {
-                let idx = child.index() as usize;
+                let (_, idx) = decode_name(&child.widget_name());
                 let path = inner_c.items.borrow().get(idx).map(|i| i.path.clone());
                 if let Some(path) = path {
                     if let Some(cb) = &*inner_c.on_activated.borrow() {
                         cb(path);
                     }
                 }
+            }
+        });
+
+        // Wire search entry.
+        search_entry.connect_search_changed({
+            let inner_c = inner.clone();
+            move |entry| {
+                *inner_c.filter_search.borrow_mut() = entry.text().to_string();
+                inner_c.flow.invalidate_filter();
             }
         });
 
@@ -138,19 +288,20 @@ impl MediaGrid {
         *self.inner.on_new_playlist.borrow_mut() = Some(Box::new(f));
     }
 
-    /// Update the playlist list used to build the right-click popover.
     pub fn set_playlists(&self, playlists: Vec<Playlist>) {
         *self.inner.playlists.borrow_mut() = playlists;
     }
 
     /// Populate the grid with a new item list (library load / rescan).
-    /// Clears all active filters.
+    /// Resets kind and playlist filters; preserves search text and sort order.
     pub fn show_items(&self, items_vec: Vec<MediaItem>) {
         while let Some(child) = self.inner.flow.first_child() {
             self.inner.flow.remove(&child);
         }
-        for item in &items_vec {
-            let card = make_card(item);
+        let playing = self.inner.now_playing_path.borrow().clone();
+        for (idx, item) in items_vec.iter().enumerate() {
+            let is_playing = playing.as_deref() == Some(item.path.as_path());
+            let card = make_card(item, idx, is_playing);
             attach_context_menu(&card, item.path.clone(), self.inner.clone());
             self.inner.flow.insert(&card, -1);
         }
@@ -158,29 +309,46 @@ impl MediaGrid {
         self.inner.filter_kind.set(FILTER_ALL);
         *self.inner.filter_playlist.borrow_mut() = None;
         self.inner.flow.invalidate_filter();
+        self.inner.flow.invalidate_sort();
     }
 
-    /// Update just one card's thumbnail after async probe completes.
+    /// Update one card's thumbnail after async probe completes.
     pub fn update_item_thumbnail(&self, path: &std::path::Path, thumb_path: PathBuf) {
-        let idx = self.inner.items.borrow().iter().position(|i| i.path == path);
-        let Some(idx) = idx else { return };
+        let orig_idx = self.inner.items.borrow().iter().position(|i| i.path == path);
+        let Some(orig_idx) = orig_idx else { return };
 
-        self.inner.items.borrow_mut()[idx].thumbnail_path = Some(thumb_path);
+        self.inner.items.borrow_mut()[orig_idx].thumbnail_path = Some(thumb_path);
 
-        if let Some(old_child) = self.inner.flow.child_at_index(idx as i32) {
-            let new_card = {
-                let items = self.inner.items.borrow();
-                make_card(&items[idx])
-            };
-            let new_path = self.inner.items.borrow()[idx].path.clone();
-            self.inner.flow.remove(&old_child);
-            self.inner.flow.insert(&new_card, idx as i32);
-            attach_context_menu(&new_card, new_path, self.inner.clone());
-            self.inner.flow.invalidate_filter();
+        // Find the child whose widget_name encodes orig_idx.
+        let target_name_prefix = format!(":{orig_idx}");
+        let mut child_opt = self.inner.flow.first_child();
+        while let Some(child) = child_opt {
+            let next = child.next_sibling();
+            if let Some(fbc) = child.downcast_ref::<FlowBoxChild>() {
+                if fbc.widget_name().ends_with(&target_name_prefix) {
+                    let is_playing = {
+                        let np = self.inner.now_playing_path.borrow();
+                        np.as_deref().map(|p| p == path).unwrap_or(false)
+                    };
+                    let new_card = {
+                        let items = self.inner.items.borrow();
+                        make_card(&items[orig_idx], orig_idx, is_playing)
+                    };
+                    let card_path = path.to_path_buf();
+                    self.inner.flow.remove(fbc);
+                    // Re-insert at the same logical position by appending and
+                    // letting the sort func place it correctly.
+                    self.inner.flow.insert(&new_card, orig_idx as i32);
+                    attach_context_menu(&new_card, card_path, self.inner.clone());
+                    self.inner.flow.invalidate_filter();
+                    break;
+                }
+            }
+            child_opt = next;
         }
     }
 
-    /// Switch the kind filter (all / video / audio) — O(1), no rebuild.
+    /// Switch the kind filter (all / video / audio).
     pub fn apply_filter(&self, filter: &str) {
         let kind = match filter {
             "video" => FILTER_VIDEO,
@@ -192,26 +360,70 @@ impl MediaGrid {
         self.inner.flow.invalidate_filter();
     }
 
-    /// Show only items whose path is in `paths` — O(1), no rebuild.
+    /// Show only items in the given playlist.
     pub fn apply_playlist_filter(&self, paths: Vec<PathBuf>) {
         let set: HashSet<PathBuf> = paths.into_iter().collect();
         *self.inner.filter_playlist.borrow_mut() = Some(set);
         self.inner.filter_kind.set(FILTER_ALL);
         self.inner.flow.invalidate_filter();
     }
+
+    /// Highlight the card for the given path; clear all others.
+    /// Pass `None` to remove the highlight.
+    pub fn set_now_playing_path(&self, path: Option<PathBuf>) {
+        *self.inner.now_playing_path.borrow_mut() = path.clone();
+        let items = self.inner.items.borrow();
+        let mut child_opt = self.inner.flow.first_child();
+        while let Some(child) = child_opt {
+            if let Some(fbc) = child.downcast_ref::<FlowBoxChild>() {
+                let (_, idx) = decode_name(&fbc.widget_name());
+                let is_playing = path.as_ref()
+                    .and_then(|p| items.get(idx).map(|i| i.path.as_path() == p.as_path()))
+                    .unwrap_or(false);
+                if is_playing {
+                    fbc.add_css_class("library-card-playing");
+                } else {
+                    fbc.remove_css_class("library-card-playing");
+                }
+            }
+            child_opt = child.next_sibling();
+        }
+    }
+}
+
+// ── Sort helper ───────────────────────────────────────────────────────────────
+
+fn std_to_gtk(o: std::cmp::Ordering) -> gtk4::Ordering {
+    match o {
+        std::cmp::Ordering::Less    => gtk4::Ordering::Smaller,
+        std::cmp::Ordering::Equal   => gtk4::Ordering::Equal,
+        std::cmp::Ordering::Greater => gtk4::Ordering::Larger,
+    }
+}
+
+fn compare_items(a: &MediaItem, b: &MediaItem, order: u8) -> gtk4::Ordering {
+    let ord = match order {
+        SORT_TITLE           => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+        SORT_DATE_ADDED      => b.date_added.unwrap_or(0).cmp(&a.date_added.unwrap_or(0)),
+        SORT_RECENTLY_PLAYED => b.last_played.unwrap_or(0).cmp(&a.last_played.unwrap_or(0)),
+        SORT_DURATION        => {
+            let da = a.duration_secs.unwrap_or(0.0) as u64;
+            let db = b.duration_secs.unwrap_or(0.0) as u64;
+            db.cmp(&da)
+        }
+        _ => std::cmp::Ordering::Equal,
+    };
+    std_to_gtk(ord)
 }
 
 // ── Right-click context menu ──────────────────────────────────────────────────
 
 fn attach_context_menu(child: &FlowBoxChild, path: PathBuf, inner: Rc<GridInner>) {
-    // Content is rebuilt on each show so the playlist list is always fresh.
     let content_box = gtk::Box::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
+        .margin_top(4).margin_bottom(4)
+        .margin_start(4).margin_end(4)
         .build();
     content_box.set_size_request(190, -1);
 
@@ -222,87 +434,72 @@ fn attach_context_menu(child: &FlowBoxChild, path: PathBuf, inner: Rc<GridInner>
     popover.set_parent(child);
 
     popover.connect_show({
-        let inner_c = inner.clone();
-        let path_c = path.clone();
+        let inner_c     = inner.clone();
+        let path_c      = path.clone();
         let content_ref = content_box.clone();
-        let popover_weak = popover.downgrade();
+        let pw          = popover.downgrade();
         move |_| {
-            // Clear previous content.
-            while let Some(w) = content_ref.first_child() {
-                content_ref.remove(&w);
-            }
-
+            while let Some(w) = content_ref.first_child() { content_ref.remove(&w); }
             let playlists = inner_c.playlists.borrow().clone();
 
             if !playlists.is_empty() {
-                // Section header
-                let header = Label::builder()
-                    .label(t("Add to playlist"))
-                    .halign(Align::Start)
-                    .css_classes(vec!["caption", "dim-label"])
-                    .margin_start(8)
-                    .margin_bottom(2)
-                    .build();
-                content_ref.append(&header);
-
-                for pl in &playlists {
-                    let lbl = Label::builder()
-                        .label(&pl.name)
+                content_ref.append(
+                    &Label::builder()
+                        .label(t("Add to playlist"))
                         .halign(Align::Start)
-                        .hexpand(true)
-                        .ellipsize(gtk::pango::EllipsizeMode::End)
-                        .max_width_chars(24)
-                        .build();
+                        .css_classes(vec!["caption", "dim-label"])
+                        .margin_start(8).margin_bottom(2)
+                        .build(),
+                );
+                for pl in &playlists {
                     let btn = gtk::Button::builder()
-                        .child(&lbl)
+                        .child(&Label::builder()
+                            .label(&pl.name)
+                            .halign(Align::Start)
+                            .hexpand(true)
+                            .ellipsize(gtk::pango::EllipsizeMode::End)
+                            .max_width_chars(24)
+                            .build())
                         .css_classes(vec!["flat"])
                         .build();
-
-                    let inner_btn = inner_c.clone();
-                    let path_btn = path_c.clone();
-                    let pl_id = pl.id.clone();
-                    let pw = popover_weak.clone();
+                    let inner_b = inner_c.clone();
+                    let path_b  = path_c.clone();
+                    let pl_id   = pl.id.clone();
+                    let pw2     = pw.clone();
                     btn.connect_clicked(move |_| {
-                        if let Some(p) = pw.upgrade() { p.popdown(); }
-                        if let Some(cb) = &*inner_btn.on_add_to_playlist.borrow() {
-                            cb(path_btn.clone(), pl_id.clone());
+                        if let Some(p) = pw2.upgrade() { p.popdown(); }
+                        if let Some(cb) = &*inner_b.on_add_to_playlist.borrow() {
+                            cb(path_b.clone(), pl_id.clone());
                         }
                     });
                     content_ref.append(&btn);
                 }
-
                 let sep = gtk::Separator::new(Orientation::Horizontal);
-                sep.set_margin_top(4);
-                sep.set_margin_bottom(4);
+                sep.set_margin_top(4); sep.set_margin_bottom(4);
                 content_ref.append(&sep);
             }
 
-            // "New playlist…" button with icon
-            let new_icon = gtk::Image::from_icon_name("list-add-symbolic");
-            let new_lbl = Label::builder()
-                .label(t("New playlist…"))
-                .halign(Align::Start)
-                .hexpand(true)
-                .build();
             let new_row = gtk::Box::builder()
                 .orientation(Orientation::Horizontal)
                 .spacing(8)
                 .build();
-            new_row.append(&new_icon);
-            new_row.append(&new_lbl);
-
+            new_row.append(&gtk::Image::from_icon_name("list-add-symbolic"));
+            new_row.append(&Label::builder()
+                .label(t("New playlist…"))
+                .halign(Align::Start)
+                .hexpand(true)
+                .build());
             let new_btn = gtk::Button::builder()
                 .child(&new_row)
                 .css_classes(vec!["flat"])
                 .build();
-
-            let inner_new = inner_c.clone();
-            let path_new = path_c.clone();
-            let pw2 = popover_weak.clone();
+            let inner_n = inner_c.clone();
+            let path_n  = path_c.clone();
+            let pw3     = pw.clone();
             new_btn.connect_clicked(move |_| {
-                if let Some(p) = pw2.upgrade() { p.popdown(); }
-                if let Some(cb) = &*inner_new.on_new_playlist.borrow() {
-                    cb(path_new.clone());
+                if let Some(p) = pw3.upgrade() { p.popdown(); }
+                if let Some(cb) = &*inner_n.on_new_playlist.borrow() {
+                    cb(path_n.clone());
                 }
             });
             content_ref.append(&new_btn);
@@ -324,7 +521,7 @@ fn attach_context_menu(child: &FlowBoxChild, path: PathBuf, inner: Rc<GridInner>
 
 // ── Card factory ──────────────────────────────────────────────────────────────
 
-fn make_card(item: &MediaItem) -> FlowBoxChild {
+fn make_card(item: &MediaItem, orig_idx: usize, is_playing: bool) -> FlowBoxChild {
     let card_box = gtk::Box::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
@@ -332,7 +529,7 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
         .css_classes(vec!["library-card"])
         .build();
 
-    // Thumbnail area — fixed at 200×120.
+    // Thumbnail — fixed 200×120.
     let thumb_overlay = gtk::Overlay::new();
     thumb_overlay.set_size_request(200, 120);
 
@@ -348,7 +545,7 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
     };
     thumb_overlay.set_child(Some(&thumb_widget));
 
-    // Bottom gradient overlay with title + subtitle.
+    // Bottom gradient: title + subtitle.
     let overlay_box = gtk::Box::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
@@ -357,14 +554,13 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
         .css_classes(vec!["library-card-overlay"])
         .build();
 
-    let title_lbl = Label::builder()
+    overlay_box.append(&Label::builder()
         .label(&item.title)
         .halign(Align::Start)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .max_width_chars(22)
         .css_classes(vec!["library-card-title"])
-        .build();
-    overlay_box.append(&title_lbl);
+        .build());
 
     let subtitle = match item.kind {
         MediaKind::Audio => item.artist.clone()
@@ -377,30 +573,40 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
             .to_string(),
     };
     if !subtitle.is_empty() {
-        let sub_lbl = Label::builder()
+        overlay_box.append(&Label::builder()
             .label(&subtitle)
             .halign(Align::Start)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .max_width_chars(22)
             .css_classes(vec!["library-card-subtitle"])
-            .build();
-        overlay_box.append(&sub_lbl);
+            .build());
     }
-
     thumb_overlay.add_overlay(&overlay_box);
 
-    // Duration badge (top-right corner).
+    // Duration badge (top-right).
     if let Some(dur) = item.duration_secs {
-        let dur_lbl = Label::builder()
+        thumb_overlay.add_overlay(&Label::builder()
             .label(&fmt_duration(dur as u64))
             .css_classes(vec!["library-badge", "library-badge-duration"])
             .halign(Align::End)
             .valign(Align::Start)
             .margin_end(6)
             .margin_top(6)
-            .build();
-        thumb_overlay.add_overlay(&dur_lbl);
+            .build());
     }
+
+    // Hover play overlay (hidden by default).
+    let play_overlay = gtk::Box::builder()
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .css_classes(vec!["library-play-overlay"])
+        .visible(false)
+        .build();
+    play_overlay.append(&gtk::Image::builder()
+        .icon_name("media-playback-start-symbolic")
+        .pixel_size(28)
+        .build());
+    thumb_overlay.add_overlay(&play_overlay);
 
     card_box.append(&thumb_overlay);
 
@@ -408,27 +614,40 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
         MediaKind::Video => "video",
         MediaKind::Audio => "audio",
     };
-    FlowBoxChild::builder()
+
+    let mut classes = vec!["library-card-child"];
+    if is_playing { classes.push("library-card-playing"); }
+
+    let child = FlowBoxChild::builder()
         .child(&card_box)
-        .css_classes(vec!["library-card-child"])
-        .build()
-        .tap(|c| {
-            c.set_widget_name(kind_name);
-            c.set_cursor_from_name(Some("pointer"));
-        })
+        .css_classes(classes)
+        .build();
+    // Encode kind + original insertion index — both filter and activation use this.
+    child.set_widget_name(&encode_name(kind_name, orig_idx));
+    child.set_cursor_from_name(Some("pointer"));
+
+    // Hover controller.
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let ov = play_overlay.clone();
+        motion.connect_enter(move |_, _, _| ov.set_visible(true));
+    }
+    {
+        let ov = play_overlay.clone();
+        motion.connect_leave(move |_| ov.set_visible(false));
+    }
+    child.add_controller(motion);
+
+    child
 }
 
-trait Tap: Sized {
-    fn tap<F: FnOnce(&Self)>(self, f: F) -> Self { f(&self); self }
-}
-impl<T> Tap for T {}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn make_placeholder(item: &MediaItem) -> gtk::Box {
-    let icon_name = match item.kind {
+    let icon = gtk::Image::from_icon_name(match item.kind {
         MediaKind::Video => "video-x-generic-symbolic",
         MediaKind::Audio => "audio-x-generic-symbolic",
-    };
-    let icon = gtk::Image::from_icon_name(icon_name);
+    });
     icon.set_pixel_size(48);
     icon.set_halign(Align::Center);
     icon.set_valign(Align::Center);

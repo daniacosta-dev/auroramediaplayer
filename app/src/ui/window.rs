@@ -1442,6 +1442,8 @@ impl MediaWindow {
         // Track the last file+duration key for which thumbnails were generated
         // to avoid re-running ffmpeg every 200 ms for the same file.
         let last_thumb_key: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+        // Last path for which we recorded a play — avoids double-counting.
+        let last_recorded_path: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let library_view_200 = library_view.clone();
         let main_stack_200   = main_stack.downgrade();
 
@@ -1734,12 +1736,13 @@ impl MediaWindow {
                     Some(name) => {
                         window_title_c.set_title(&format!("Aurora Media Player — {name}"));
                         window_title_c.set_subtitle(&artist);
-                        // Show "Now Playing" button only when the library is visible.
+                        // Show "Now Playing" / pause buttons only when the library is visible.
                         if main_stack_200.upgrade()
                             .map(|s| s.visible_child_name().as_deref() == Some("library"))
                             .unwrap_or(false)
                         {
                             library_view_200.set_now_playing(true, &name);
+                            library_view_200.set_play_pause_state(paused);
                         }
                     }
                 }
@@ -1754,6 +1757,28 @@ impl MediaWindow {
                     hdr_badge_c.set_visible(has_video && !idle);
                 } else {
                     hdr_badge_c.set_visible(false);
+                }
+            }
+
+            // ── Track change: record play + update now-playing card ────────
+            {
+                let current = snap_path.clone();
+                let mut last = last_recorded_path.borrow_mut();
+                if !idle && current != *last {
+                    let path_opt = current.as_deref()
+                        .filter(|p| !p.starts_with("http://") && !p.starts_with("https://"))
+                        .map(std::path::PathBuf::from);
+                    if let Some(ref path) = path_opt {
+                        let store_rc = library_view_200.store();
+                        let mut store = store_rc.borrow_mut();
+                        store.record_play(path);
+                        store.save();
+                    }
+                    library_view_200.set_now_playing_path(path_opt);
+                    *last = current;
+                } else if idle && last.is_some() {
+                    library_view_200.set_now_playing_path(None);
+                    *last = None;
                 }
             }
 

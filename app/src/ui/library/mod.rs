@@ -7,11 +7,13 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use adw::{NavigationPage, ToolbarView, HeaderBar};
-use gtk4::{self as gtk, Button, Label};
+use gtk4::{self as gtk, Button};
 use gtk4::prelude::*;
+use gtk4::glib;
 
 use crate::i18n::t;
 use crate::library::{LibraryStore, Playlist, metadata::probe_batch_async};
+use crate::player::PlayerCommand;
 use crate::state::SharedState;
 
 pub use sidebar::LibrarySidebar;
@@ -24,14 +26,17 @@ pub struct LibraryView {
     sidebar: LibrarySidebar,
     grid: MediaGrid,
     store: Rc<RefCell<LibraryStore>>,
+    state: SharedState,
     now_playing_btn: Button,
+    pause_btn: Button,
+    now_playing_group: gtk::Box,
     on_play: Rc<RefCell<Option<std::boxed::Box<dyn Fn(PathBuf)>>>>,
     on_add_folder: Rc<RefCell<Option<std::boxed::Box<dyn Fn()>>>>,
     on_now_playing: Rc<RefCell<Option<std::boxed::Box<dyn Fn()>>>>,
 }
 
 impl LibraryView {
-    pub fn new(_state: SharedState) -> Self {
+    pub fn new(state: SharedState) -> Self {
         let store = Rc::new(RefCell::new(LibraryStore::load()));
         let on_play: Rc<RefCell<Option<std::boxed::Box<dyn Fn(PathBuf)>>>> =
             Rc::new(RefCell::new(None));
@@ -59,23 +64,37 @@ impl LibraryView {
         // ── HeaderBar ─────────────────────────────────────────────────────
         let headerbar = HeaderBar::new();
 
-        // "Now Playing" compact button — hidden until media is playing.
+        // Pause / resume button — left side of the linked group.
+        let pause_btn = Button::builder()
+            .icon_name("media-playback-pause-symbolic")
+            .tooltip_text(t("Pause"))
+            .build();
+        pause_btn.set_cursor_from_name(Some("pointer"));
+        {
+            let state_c = state.clone();
+            pause_btn.connect_clicked(move |_| {
+                if let Some(player) = state_c.borrow().player.as_ref() {
+                    player.execute(PlayerCommand::TogglePause).ok();
+                }
+            });
+        }
+
+        // "Now Playing" button — right side of the linked group, navigates back to player.
         let now_playing_btn = Button::builder()
+            .label(t("Now Playing"))
             .tooltip_text(t("Back to player"))
-            .visible(false)
             .css_classes(vec!["suggested-action"])
             .build();
         now_playing_btn.set_cursor_from_name(Some("pointer"));
 
-        let btn_box = gtk::Box::builder()
+        // Group both buttons as a linked pill, hidden until media is playing.
+        let now_playing_group = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
+            .css_classes(vec!["linked"])
+            .visible(false)
             .build();
-        let btn_icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
-        let btn_lbl = Label::new(Some(t("Now Playing")));
-        btn_box.append(&btn_icon);
-        btn_box.append(&btn_lbl);
-        now_playing_btn.set_child(Some(&btn_box));
+        now_playing_group.append(&pause_btn);
+        now_playing_group.append(&now_playing_btn);
 
         let scan_btn = Button::builder()
             .icon_name("view-refresh-symbolic")
@@ -89,7 +108,7 @@ impl LibraryView {
             .build();
         add_btn.set_cursor_from_name(Some("pointer"));
 
-        headerbar.pack_start(&now_playing_btn);
+        headerbar.pack_start(&now_playing_group);
         headerbar.pack_end(&scan_btn);
         headerbar.pack_end(&add_btn);
 
@@ -97,6 +116,23 @@ impl LibraryView {
         let toolbar = ToolbarView::new();
         toolbar.add_top_bar(&headerbar);
         toolbar.set_content(Some(&split));
+
+        // ── Space shortcut: pause/resume from library ─────────────────────
+        {
+            let state_c = state.clone();
+            let key_ctrl = gtk::EventControllerKey::new();
+            key_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
+            key_ctrl.connect_key_pressed(move |_, key, _, _| {
+                if key == gdk4::Key::space {
+                    if let Some(player) = state_c.borrow().player.as_ref() {
+                        player.execute(PlayerCommand::TogglePause).ok();
+                    }
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            });
+            toolbar.add_controller(key_ctrl);
+        }
 
         // ── NavigationPage ────────────────────────────────────────────────
         let page = NavigationPage::builder()
@@ -247,8 +283,8 @@ impl LibraryView {
         }
 
         let view = Self {
-            page, sidebar, grid, store,
-            now_playing_btn,
+            page, sidebar, grid, store, state,
+            now_playing_btn, pause_btn, now_playing_group,
             on_play, on_add_folder, on_now_playing,
         };
         view.reload_from_store();
@@ -272,18 +308,48 @@ impl LibraryView {
         *self.on_now_playing.borrow_mut() = Some(std::boxed::Box::new(f));
     }
 
-    /// Show or hide the "Now Playing" button.  The label stays fixed as
-    /// "Now Playing"; the track title is shown in the tooltip only.
+    /// Show or hide the "Now Playing" / pause group.
+    /// The track title is shown truncated in the button label; full title in tooltip.
     pub fn set_now_playing(&self, active: bool, title: &str) {
-        self.now_playing_btn.set_visible(active);
+        self.now_playing_group.set_visible(active);
         if active {
+            let display = if title.is_empty() {
+                t("Now Playing").to_string()
+            } else {
+                let chars: Vec<char> = title.chars().collect();
+                if chars.len() > 28 {
+                    format!("{}…", chars[..27].iter().collect::<String>())
+                } else {
+                    title.to_string()
+                }
+            };
+            self.now_playing_btn.set_label(&display);
             let tip = if title.is_empty() {
                 t("Back to player").to_string()
             } else {
-                format!("{} — {}", t("Now Playing"), title)
+                format!("{} ↩", title)
             };
             self.now_playing_btn.set_tooltip_text(Some(&tip));
         }
+    }
+
+    /// Update the pause/resume button icon and group style to match playback state.
+    pub fn set_play_pause_state(&self, paused: bool) {
+        if paused {
+            self.pause_btn.set_icon_name("media-playback-start-symbolic");
+            self.pause_btn.set_tooltip_text(Some(t("Resume")));
+            // Dim the "Now Playing" label when paused so it reads as inactive.
+            self.now_playing_btn.remove_css_class("suggested-action");
+        } else {
+            self.pause_btn.set_icon_name("media-playback-pause-symbolic");
+            self.pause_btn.set_tooltip_text(Some(t("Pause")));
+            self.now_playing_btn.add_css_class("suggested-action");
+        }
+    }
+
+    /// Forward the now-playing path to the grid so it can highlight the card.
+    pub fn set_now_playing_path(&self, path: Option<PathBuf>) {
+        self.grid.set_now_playing_path(path);
     }
 
     pub fn reload_from_store(&self) {
