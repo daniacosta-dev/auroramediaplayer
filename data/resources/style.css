@@ -326,45 +326,66 @@ label.playlist-duration {
 /* Strip the default FlowBoxChild focus/selection chrome */
 .library-card-child {
     background: none;
-    border-radius: 12px;
+    border-radius: 16px;
     padding: 0;
 }
 
 .library-card-child:focus {
     outline: 2px solid @accent_color;
-    outline-offset: 2px;
+    outline-offset: 3px;
 }
 
 /* Card container */
 .library-card {
-    border-radius: 12px;
+    border-radius: 16px;
     background-color: @card_bg_color;
-    border: 1px solid alpha(@window_fg_color, 0.07);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-    transition: box-shadow 120ms ease, background-color 120ms ease;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+    transition: box-shadow 150ms ease;
+}
+
+/* Thumbnail Picture — border-radius clips the image to the card corners.
+   GTK4 overflow:hidden clips rectangularly (ignores border-radius), so the
+   radius must live on each drawing widget directly. */
+.library-card-picture {
+    border-radius: 16px;
 }
 
 .library-card:hover {
-    background-color: mix(@card_bg_color, @window_fg_color, 0.04);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.40);
 }
 
-/* Title: slightly bold, full contrast */
+/* Bottom gradient that the title/subtitle sit on.
+   Bottom corners match the card radius so the gradient doesn't paint
+   over the picture's rounded corners. */
+.library-card-overlay {
+    border-radius: 0 0 16px 16px;
+    background-image: linear-gradient(
+        to top,
+        alpha(black, 0.82) 0%,
+        alpha(black, 0.55) 50%,
+        alpha(black, 0) 100%
+    );
+    padding: 30px 9px 8px;
+}
+
+/* Title: white, readable over gradient */
 .library-card-title {
     font-weight: 600;
-    font-size: 0.85em;
+    font-size: 0.88em;
+    color: white;
 }
 
-/* Subtitle inherits dim-label opacity from libadwaita */
+/* Subtitle: dimmed white */
 .library-card-subtitle {
-    font-size: 0.78em;
+    font-size: 0.75em;
+    color: alpha(white, 0.68);
 }
 
 /* Shared badge base: dark pill */
 .library-badge {
-    background-color: rgba(0, 0, 0, 0.72);
-    border-radius: 5px;
-    padding: 2px 5px;
+    background-color: rgba(0, 0, 0, 0.65);
+    border-radius: 6px;
+    padding: 2px 6px;
     font-size: 0.72em;
     font-weight: 700;
     color: white;
@@ -382,12 +403,12 @@ label.playlist-duration {
     font-size: 0.68em;
 }
 
-/* Placeholder when there is no thumbnail */
+/* Placeholder when there is no thumbnail — border-radius clips its background */
 .library-card-placeholder {
+    border-radius: 16px;
     background: linear-gradient(
         135deg,
-        alpha(@window_fg_color, 0.04) 0%,
-        alpha(@accent_color, 0.06) 100%
+        alpha(@window_fg_color, 0.06) 0%,
+        alpha(@accent_color, 0.10) 100%
     );
-    border-radius: 11px 11px 0 0;
 }

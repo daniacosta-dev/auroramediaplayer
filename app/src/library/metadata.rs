@@ -120,10 +120,10 @@ fn extract_thumbnail(source: &Path, duration_secs: Option<f64>) -> Option<PathBu
     std::fs::create_dir_all(&cache_dir).ok()?;
 
     // Use a hash of the path as the filename to avoid collisions.
-    // Suffix "_s" marks small-scaled thumbnails (160×100) — different from any
-    // full-resolution thumbnails that may exist in the cache from older versions.
+    // Suffix "_l" marks 200×120 thumbnails — bumped from "_m" (160×100) when
+    // the card size increased.  Old _m files are simply ignored (different name).
     let hash = simple_hash(source.to_string_lossy().as_bytes());
-    let thumb_path = cache_dir.join(format!("{hash:016x}_m.jpg"));
+    let thumb_path = cache_dir.join(format!("{hash:016x}_l.jpg"));
 
     // Skip extraction if the thumbnail already exists.
     if thumb_path.exists() {
@@ -138,8 +138,8 @@ fn extract_thumbnail(source: &Path, duration_secs: Option<f64>) -> Option<PathBu
         .unwrap_or(3.0);
     let seek_arg = format!("{seek_secs:.1}");
 
-    // ffmpeg: input-seek to avoid black frames, scale to fit within 160×100,
-    // pad to exactly 160×100 so gtk::Picture always has a fixed natural size.
+    // ffmpeg: input-seek to avoid black frames, scale to fit within 200×120,
+    // pad to exactly 200×120 so gtk::Picture always has a fixed natural size.
     let status = std::process::Command::new("ffmpeg")
         .args([
             "-v", "quiet",
@@ -148,7 +148,7 @@ fn extract_thumbnail(source: &Path, duration_secs: Option<f64>) -> Option<PathBu
             "-i", &source.to_string_lossy(),
             "-an",                   // no audio
             "-vframes", "1",         // single frame
-            "-vf", "scale=160:100:force_original_aspect_ratio=decrease,pad=160:100:(ow-iw)/2:(oh-ih)/2:color=black",
+            "-vf", "scale=200:120:force_original_aspect_ratio=decrease,pad=200:120:(ow-iw)/2:(oh-ih)/2:color=black",
             "-q:v", "1",             // highest JPEG quality (1=best, 31=worst)
         ])
         .arg(&thumb_path)

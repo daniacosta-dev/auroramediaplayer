@@ -164,61 +164,45 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
     let card_box = gtk::Box::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
-        .width_request(160)
+        .width_request(200)
         .css_classes(vec!["library-card"])
         .build();
 
-    // ── Thumbnail area ────────────────────────────────────────────────────
-    // The Overlay is fixed at 160×100.  Thumbnails are extracted at that exact
-    // size by ffmpeg, so Picture's natural size == 160×100 and the FlowBox can
-    // pack multiple cards per row correctly.
+    // ── Thumbnail area ─────────────────────────────────────────────────────
+    // Fixed at 200×120.  Thumbnails are extracted at this exact size by ffmpeg,
+    // so Picture's natural size == 200×120 and the FlowBox packs correctly.
     let thumb_overlay = gtk::Overlay::new();
-    thumb_overlay.set_size_request(160, 100);
+    thumb_overlay.set_size_request(200, 120);
 
     let thumb_widget: gtk::Widget = if let Some(thumb_path) = &item.thumbnail_path {
         let pic = gtk::Picture::for_filename(thumb_path);
         pic.set_content_fit(gtk::ContentFit::Cover);
         pic.set_can_shrink(true);
-        pic.set_size_request(160, 100);
+        pic.set_size_request(200, 120);
+        pic.add_css_class("library-card-picture");
         pic.upcast()
     } else {
         make_placeholder(item).upcast()
     };
     thumb_overlay.set_child(Some(&thumb_widget));
 
-    // Duration badge (bottom-right)
-    if let Some(dur) = item.duration_secs {
-        let dur_lbl = Label::builder()
-            .label(&fmt_duration(dur as u64))
-            .css_classes(vec!["library-badge", "library-badge-duration"])
-            .halign(Align::End)
-            .valign(Align::End)
-            .margin_end(6)
-            .margin_bottom(6)
-            .build();
-        thumb_overlay.add_overlay(&dur_lbl);
-    }
-
-    card_box.append(&thumb_overlay);
-
-    // ── Metadata area ─────────────────────────────────────────────────────
-    let meta_box = gtk::Box::builder()
+    // ── Bottom gradient overlay with title + subtitle ──────────────────────
+    let overlay_box = gtk::Box::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
-        .margin_start(8)
-        .margin_end(8)
-        .margin_top(6)
-        .margin_bottom(8)
+        .valign(Align::End)
+        .halign(Align::Fill)
+        .css_classes(vec!["library-card-overlay"])
         .build();
 
     let title_lbl = Label::builder()
         .label(&item.title)
         .halign(Align::Start)
         .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(20)
+        .max_width_chars(22)
         .css_classes(vec!["library-card-title"])
         .build();
-    meta_box.append(&title_lbl);
+    overlay_box.append(&title_lbl);
 
     let subtitle = match item.kind {
         MediaKind::Audio => item.artist.clone()
@@ -235,13 +219,28 @@ fn make_card(item: &MediaItem) -> FlowBoxChild {
             .label(&subtitle)
             .halign(Align::Start)
             .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(20)
-            .css_classes(vec!["library-card-subtitle", "dim-label"])
+            .max_width_chars(22)
+            .css_classes(vec!["library-card-subtitle"])
             .build();
-        meta_box.append(&sub_lbl);
+        overlay_box.append(&sub_lbl);
     }
 
-    card_box.append(&meta_box);
+    thumb_overlay.add_overlay(&overlay_box);
+
+    // ── Duration badge (top-right corner) ─────────────────────────────────
+    if let Some(dur) = item.duration_secs {
+        let dur_lbl = Label::builder()
+            .label(&fmt_duration(dur as u64))
+            .css_classes(vec!["library-badge", "library-badge-duration"])
+            .halign(Align::End)
+            .valign(Align::Start)
+            .margin_end(6)
+            .margin_top(6)
+            .build();
+        thumb_overlay.add_overlay(&dur_lbl);
+    }
+
+    card_box.append(&thumb_overlay);
 
     // Tag the child with its kind so the filter_func can read it in O(1).
     let kind_name = match item.kind {
@@ -266,7 +265,7 @@ fn make_placeholder(item: &MediaItem) -> gtk::Box {
         MediaKind::Audio => "audio-x-generic-symbolic",
     };
     let icon = gtk::Image::from_icon_name(icon_name);
-    icon.set_pixel_size(40);
+    icon.set_pixel_size(48);
     icon.set_halign(Align::Center);
     icon.set_valign(Align::Center);
     icon.set_hexpand(true);
@@ -279,7 +278,7 @@ fn make_placeholder(item: &MediaItem) -> gtk::Box {
         .valign(Align::Fill)
         .css_classes(vec!["library-card-placeholder"])
         .build();
-    placeholder.set_size_request(160, 100);
+    placeholder.set_size_request(200, 120);
     placeholder.append(&icon);
     placeholder
 }

@@ -187,12 +187,12 @@ fn make_category_row(icon: &str, label: &str, name: &str) -> ListBoxRow {
         .spacing(10)
         .margin_start(6)
         .margin_end(6)
-        .margin_top(4)
-        .margin_bottom(4)
+        .margin_top(6)
+        .margin_bottom(6)
         .build();
 
     let image = gtk::Image::from_icon_name(icon);
-    image.set_pixel_size(16);
+    image.set_pixel_size(18);
 
     let lbl = Label::builder()
         .label(label)
@@ -214,12 +214,12 @@ fn make_folder_row(label: &str, name: &str) -> ListBoxRow {
         .spacing(10)
         .margin_start(6)
         .margin_end(6)
-        .margin_top(4)
-        .margin_bottom(4)
+        .margin_top(6)
+        .margin_bottom(6)
         .build();
 
     let image = gtk::Image::from_icon_name("folder-symbolic");
-    image.set_pixel_size(16);
+    image.set_pixel_size(18);
 
     let lbl = Label::builder()
         .label(label)
