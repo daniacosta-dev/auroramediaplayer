@@ -83,6 +83,17 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.2.0" date="2026-04-07">
+      <description>
+        <p>New features:</p>
+        <ul>
+          <li>Library with video and audio collections</li>
+          <li>Thumbnail previews for local media</li>
+          <li>Search and sort in the library</li>
+          <li>Recently played tracking with play count</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.5" date="2026-04-01">
       <description>
         <p>Improvements:</p>

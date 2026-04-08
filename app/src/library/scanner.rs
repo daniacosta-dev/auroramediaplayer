@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub enum MediaKind {
     Video,
     Audio,
+    /// URL/stream item from the "Open URL" dialog — stored in the library
+    /// but excluded from All / Video / Audio browsing views.
+    Stream,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +50,25 @@ pub struct MediaItem {
 }
 
 impl MediaItem {
+    /// Create a stream item from a URL and display title.
+    pub fn new_stream(url: String, title: String) -> Self {
+        let date_added = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .ok();
+        Self {
+            path: std::path::PathBuf::from(url),
+            title,
+            kind: MediaKind::Stream,
+            duration_secs: None,
+            artist: None, album: None, year: None, genre: None, track_number: None,
+            width: None, height: None, thumbnail_path: None,
+            date_added,
+            last_played: None,
+            play_count: 0,
+        }
+    }
+
     /// Display resolution label e.g. "4K", "1080p", "720p".
     pub fn resolution_label(&self) -> Option<&'static str> {
         match (self.width, self.height) {

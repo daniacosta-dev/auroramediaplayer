@@ -13,6 +13,22 @@ use gtk4::prelude::*;
 use crate::i18n::t;
 use crate::library::{MediaItem, MediaKind, Playlist};
 
+// ── Is-stream helper ──────────────────────────────────────────────────────────
+
+fn is_stream_url(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+fn url_hostname(url: &str) -> String {
+    url.strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|host| host.split('?').next())
+        .unwrap_or(url)
+        .to_string()
+}
+
 // ── Filter constants ──────────────────────────────────────────────────────────
 
 const FILTER_ALL: u8   = 0;
@@ -58,31 +74,35 @@ pub struct MediaGrid {
 }
 
 struct GridInner {
-    page:               NavigationPage,
-    flow:               FlowBox,
-    view_stack:         gtk::Stack,
-    filter_kind:        Rc<Cell<u8>>,
-    filter_playlist:    Rc<RefCell<Option<HashSet<PathBuf>>>>,
-    filter_search:      Rc<RefCell<String>>,
-    filter_recent_only: Rc<Cell<bool>>,
-    sort_order:         Rc<Cell<u8>>,
-    now_playing_path:   Rc<RefCell<Option<PathBuf>>>,
-    items:              Rc<RefCell<Vec<MediaItem>>>,
-    playlists:          RefCell<Vec<Playlist>>,
-    on_activated:       RefCell<Option<Box<dyn Fn(PathBuf)>>>,
-    on_add_to_playlist: RefCell<Option<Box<dyn Fn(PathBuf, String)>>>,
-    on_new_playlist:    RefCell<Option<Box<dyn Fn(PathBuf)>>>,
+    page:                  NavigationPage,
+    flow:                  FlowBox,
+    view_stack:            gtk::Stack,
+    filter_kind:           Rc<Cell<u8>>,
+    filter_playlist:       Rc<RefCell<Option<HashSet<PathBuf>>>>,
+    filter_folder:         Rc<RefCell<Option<PathBuf>>>,
+    filter_search:         Rc<RefCell<String>>,
+    filter_recent_only:    Rc<Cell<bool>>,
+    filter_include_streams: Rc<Cell<bool>>,
+    sort_order:            Rc<Cell<u8>>,
+    now_playing_path:      Rc<RefCell<Option<PathBuf>>>,
+    items:                 Rc<RefCell<Vec<MediaItem>>>,
+    playlists:             RefCell<Vec<Playlist>>,
+    on_activated:          RefCell<Option<Box<dyn Fn(PathBuf)>>>,
+    on_add_to_playlist:    RefCell<Option<Box<dyn Fn(PathBuf, String)>>>,
+    on_new_playlist:       RefCell<Option<Box<dyn Fn(PathBuf)>>>,
 }
 
 impl MediaGrid {
     pub fn new() -> Self {
-        let filter_kind        = Rc::new(Cell::new(FILTER_ALL));
-        let filter_playlist    = Rc::new(RefCell::new(None::<HashSet<PathBuf>>));
-        let filter_search      = Rc::new(RefCell::new(String::new()));
-        let filter_recent_only = Rc::new(Cell::new(false));
-        let sort_order         = Rc::new(Cell::new(SORT_TITLE));
-        let now_playing_path   = Rc::new(RefCell::new(None::<PathBuf>));
-        let items              = Rc::new(RefCell::new(Vec::<MediaItem>::new()));
+        let filter_kind           = Rc::new(Cell::new(FILTER_ALL));
+        let filter_playlist       = Rc::new(RefCell::new(None::<HashSet<PathBuf>>));
+        let filter_folder         = Rc::new(RefCell::new(None::<PathBuf>));
+        let filter_search         = Rc::new(RefCell::new(String::new()));
+        let filter_recent_only    = Rc::new(Cell::new(false));
+        let filter_include_streams = Rc::new(Cell::new(false));
+        let sort_order            = Rc::new(Cell::new(SORT_TITLE));
+        let now_playing_path      = Rc::new(RefCell::new(None::<PathBuf>));
+        let items                 = Rc::new(RefCell::new(Vec::<MediaItem>::new()));
 
         let flow = FlowBox::builder()
             .valign(Align::Start)
@@ -97,33 +117,45 @@ impl MediaGrid {
             .margin_bottom(16)
             .build();
 
-        // ── Filter: kind + playlist + search + recent ────────────────────
+        // ── Filter: kind + playlist + folder + search + recent + streams ─
         // Uses the original insertion index stored in widget_name — NOT child.index(),
         // which reflects visual (sorted) position and maps to the wrong item.
         {
-            let fk = filter_kind.clone();
-            let fp = filter_playlist.clone();
-            let fs = filter_search.clone();
-            let fr = filter_recent_only.clone();
+            let fk  = filter_kind.clone();
+            let fp  = filter_playlist.clone();
+            let ff  = filter_folder.clone();
+            let fs  = filter_search.clone();
+            let fr  = filter_recent_only.clone();
+            let fis = filter_include_streams.clone();
             let items_f = items.clone();
             flow.set_filter_func(move |child| {
                 let _wn = child.widget_name(); let (kind, idx) = decode_name(&_wn);
                 let items = items_f.borrow();
                 let Some(item) = items.get(idx) else { return false };
 
+                // Stream items are hidden unless we're in a URL playlist view.
+                if kind == "stream" && !fis.get() { return false; }
+
                 // Recently-played filter.
                 if fr.get() && item.last_played.is_none() { return false; }
 
-                // Playlist filter.
+                // Playlist filter (path-based).
                 if let Some(paths) = fp.borrow().as_ref() {
                     if !paths.contains(&item.path) { return false; }
                 }
 
-                // Kind filter.
+                // Folder filter.
+                if let Some(folder) = ff.borrow().as_ref() {
+                    if !item.path.starts_with(folder.as_path()) { return false; }
+                }
+
+                // Kind filter. Streams are only allowed when fis flag is set
+                // (i.e. a URL playlist is selected); the fis check above already
+                // blocks them otherwise, so here we just need to not double-block.
                 let kind_ok = match fk.get() {
                     FILTER_VIDEO => kind == "video",
                     FILTER_AUDIO => kind == "audio",
-                    _ => true,
+                    _ => kind != "stream" || fis.get(),
                 };
                 if !kind_ok { return false; }
 
@@ -270,8 +302,10 @@ impl MediaGrid {
             view_stack,
             filter_kind,
             filter_playlist,
+            filter_folder,
             filter_search,
             filter_recent_only,
+            filter_include_streams,
             sort_order,
             now_playing_path,
             items,
@@ -344,9 +378,29 @@ impl MediaGrid {
         *self.inner.items.borrow_mut() = items_vec;
         self.inner.filter_kind.set(FILTER_ALL);
         self.inner.filter_recent_only.set(false);
+        self.inner.filter_include_streams.set(false);
         *self.inner.filter_playlist.borrow_mut() = None;
+        *self.inner.filter_folder.borrow_mut() = None;
         self.inner.flow.invalidate_filter();
         self.inner.flow.invalidate_sort();
+        schedule_empty_state_update(self.inner.clone());
+    }
+
+    /// Append stream items to the grid without resetting the current filter.
+    /// Used when a URL playlist is added while the library view is open.
+    pub fn append_stream_items(&self, new_items: Vec<MediaItem>) {
+        let playing = self.inner.now_playing_path.borrow().clone();
+        let start_idx = self.inner.items.borrow().len();
+        for (i, item) in new_items.iter().enumerate() {
+            let idx = start_idx + i;
+            let is_playing = playing.as_deref() == Some(item.path.as_path());
+            let card = make_card(item, idx, is_playing);
+            let card_path = item.path.clone();
+            attach_context_menu(&card, card_path, self.inner.clone());
+            self.inner.flow.insert(&card, -1);
+        }
+        self.inner.items.borrow_mut().extend(new_items);
+        self.inner.flow.invalidate_filter();
         schedule_empty_state_update(self.inner.clone());
     }
 
@@ -395,17 +449,33 @@ impl MediaGrid {
         };
         self.inner.filter_kind.set(kind);
         self.inner.filter_recent_only.set(false);
+        self.inner.filter_include_streams.set(false);
+        *self.inner.filter_playlist.borrow_mut() = None;
+        *self.inner.filter_folder.borrow_mut() = None;
+        self.inner.flow.invalidate_filter();
+        schedule_empty_state_update(self.inner.clone());
+    }
+
+    /// Show only items under the given folder path.
+    pub fn apply_folder_filter(&self, folder: PathBuf) {
+        *self.inner.filter_folder.borrow_mut() = Some(folder);
+        self.inner.filter_kind.set(FILTER_ALL);
+        self.inner.filter_recent_only.set(false);
+        self.inner.filter_include_streams.set(false);
         *self.inner.filter_playlist.borrow_mut() = None;
         self.inner.flow.invalidate_filter();
         schedule_empty_state_update(self.inner.clone());
     }
 
-    /// Show only items in the given playlist.
+    /// Show only items in the given playlist (including stream items for URL playlists).
     pub fn apply_playlist_filter(&self, paths: Vec<PathBuf>) {
+        let has_streams = paths.iter().any(|p| is_stream_url(p.as_path()));
         let set: HashSet<PathBuf> = paths.into_iter().collect();
         *self.inner.filter_playlist.borrow_mut() = Some(set);
         self.inner.filter_kind.set(FILTER_ALL);
         self.inner.filter_recent_only.set(false);
+        self.inner.filter_include_streams.set(has_streams);
+        *self.inner.filter_folder.borrow_mut() = None;
         self.inner.flow.invalidate_filter();
         schedule_empty_state_update(self.inner.clone());
     }
@@ -414,7 +484,9 @@ impl MediaGrid {
     pub fn apply_recent_filter(&self) {
         self.inner.filter_recent_only.set(true);
         self.inner.filter_kind.set(FILTER_ALL);
+        self.inner.filter_include_streams.set(false);
         *self.inner.filter_playlist.borrow_mut() = None;
+        *self.inner.filter_folder.borrow_mut() = None;
         self.inner.sort_order.set(SORT_RECENTLY_PLAYED);
         self.inner.flow.invalidate_filter();
         self.inner.flow.invalidate_sort();
@@ -466,23 +538,31 @@ impl MediaGrid {
 fn schedule_empty_state_update(inner: Rc<GridInner>) {
     glib::idle_add_local_once(move || {
         let items = inner.items.borrow();
-        let page = if items.is_empty() {
+        let non_stream_count = items.iter().filter(|i| i.kind != MediaKind::Stream).count();
+        let page = if non_stream_count == 0 && !inner.filter_include_streams.get() {
             PAGE_EMPTY_LIBRARY
         } else {
             // Count items that pass the current filters.
-            let fk = inner.filter_kind.get();
-            let fr = inner.filter_recent_only.get();
-            let fs = inner.filter_search.borrow().to_lowercase();
-            let fp = inner.filter_playlist.borrow();
+            let fk  = inner.filter_kind.get();
+            let fr  = inner.filter_recent_only.get();
+            let fis = inner.filter_include_streams.get();
+            let fs  = inner.filter_search.borrow().to_lowercase();
+            let fp  = inner.filter_playlist.borrow();
+            let ff  = inner.filter_folder.borrow();
             let visible = items.iter().filter(|item| {
+                let is_stream = item.kind == MediaKind::Stream;
+                if is_stream && !fis { return false; }
                 if fr && item.last_played.is_none() { return false; }
                 if let Some(paths) = fp.as_ref() {
                     if !paths.contains(&item.path) { return false; }
                 }
+                if let Some(folder) = ff.as_ref() {
+                    if !item.path.starts_with(folder.as_path()) { return false; }
+                }
                 match fk {
                     FILTER_VIDEO => { if item.kind != MediaKind::Video { return false; } }
                     FILTER_AUDIO => { if item.kind != MediaKind::Audio { return false; } }
-                    _ => {}
+                    _ => { if is_stream && !fis { return false; } }
                 }
                 if !fs.is_empty() {
                     let hit = item.title.to_lowercase().contains(fs.as_str())
@@ -633,17 +713,24 @@ fn make_card(item: &MediaItem, orig_idx: usize, is_playing: bool) -> FlowBoxChil
         .orientation(Orientation::Vertical)
         .spacing(0)
         .width_request(200)
+        .height_request(120)
         .css_classes(vec!["library-card"])
         .build();
 
     // Thumbnail — fixed 200×120.
     let thumb_overlay = gtk::Overlay::new();
     thumb_overlay.set_size_request(200, 120);
+    thumb_overlay.set_halign(Align::Fill);
+    thumb_overlay.set_valign(Align::Start);
+    // Clip content that tries to exceed the 200×120 bounding box.
+    thumb_overlay.set_overflow(gtk::Overflow::Hidden);
 
     let thumb_widget: gtk::Widget = if let Some(thumb_path) = &item.thumbnail_path {
         let pic = gtk::Picture::for_filename(thumb_path);
         pic.set_content_fit(gtk::ContentFit::Cover);
         pic.set_can_shrink(true);
+        pic.set_halign(Align::Fill);
+        pic.set_valign(Align::Fill);
         pic.set_size_request(200, 120);
         pic.add_css_class("library-card-picture");
         pic.upcast()
@@ -678,6 +765,7 @@ fn make_card(item: &MediaItem, orig_idx: usize, is_playing: bool) -> FlowBoxChil
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string(),
+        MediaKind::Stream => url_hostname(&item.path.to_string_lossy()),
     };
     if !subtitle.is_empty() {
         overlay_box.append(&Label::builder()
@@ -718,8 +806,9 @@ fn make_card(item: &MediaItem, orig_idx: usize, is_playing: bool) -> FlowBoxChil
     card_box.append(&thumb_overlay);
 
     let kind_name = match item.kind {
-        MediaKind::Video => "video",
-        MediaKind::Audio => "audio",
+        MediaKind::Video  => "video",
+        MediaKind::Audio  => "audio",
+        MediaKind::Stream => "stream",
     };
 
     let mut classes = vec!["library-card-child"];
@@ -732,6 +821,10 @@ fn make_card(item: &MediaItem, orig_idx: usize, is_playing: bool) -> FlowBoxChil
     // Encode kind + original insertion index — both filter and activation use this.
     child.set_widget_name(&encode_name(kind_name, orig_idx));
     child.set_cursor_from_name(Some("pointer"));
+    // Force a fixed natural size so FlowBox homogeneous mode uses the same
+    // cell dimensions for all cards (audio, video, stream) in every filter view.
+    child.set_size_request(200, 120);
+    child.set_hexpand(false);
 
     // Hover controller.
     let motion = gtk::EventControllerMotion::new();
@@ -752,8 +845,9 @@ fn make_card(item: &MediaItem, orig_idx: usize, is_playing: bool) -> FlowBoxChil
 
 fn make_placeholder(item: &MediaItem) -> gtk::Box {
     let icon = gtk::Image::from_icon_name(match item.kind {
-        MediaKind::Video => "video-x-generic-symbolic",
-        MediaKind::Audio => "audio-x-generic-symbolic",
+        MediaKind::Video  => "video-x-generic-symbolic",
+        MediaKind::Audio  => "audio-x-generic-symbolic",
+        MediaKind::Stream => "applications-internet-symbolic",
     });
     icon.set_pixel_size(48);
     icon.set_halign(Align::Center);
@@ -766,9 +860,12 @@ fn make_placeholder(item: &MediaItem) -> gtk::Box {
         .orientation(Orientation::Vertical)
         .halign(Align::Fill)
         .valign(Align::Fill)
+        .hexpand(false)
+        .vexpand(false)
         .css_classes(vec!["library-card-placeholder"])
         .build();
     placeholder.set_size_request(200, 120);
+    placeholder.set_overflow(gtk::Overflow::Hidden);
     placeholder.append(&icon);
     placeholder
 }

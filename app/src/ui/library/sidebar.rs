@@ -200,9 +200,19 @@ impl LibrarySidebar {
         let mut new_rows = Vec::new();
         for pl in &playlists {
             let widget_name = format!("playlist:{}", pl.id);
+            // Detect URL playlists by checking if paths are http(s) URLs.
+            let is_url_playlist = pl.paths.first().map(|p| {
+                let s = p.to_string_lossy();
+                s.starts_with("http://") || s.starts_with("https://")
+            }).unwrap_or(false);
+            let icon = if is_url_playlist { "applications-internet-symbolic" } else { "view-list-symbolic" };
             let (row, count_lbl) =
-                make_nav_row_with_count("view-list-symbolic", &pl.name, &widget_name);
-            let live = pl.paths.iter().filter(|p| p.is_file()).count();
+                make_nav_row_with_count(icon, &pl.name, &widget_name);
+            let live = if is_url_playlist {
+                pl.paths.len() // URL items don't live on disk
+            } else {
+                pl.paths.iter().filter(|p| p.is_file()).count()
+            };
             set_count_label(&count_lbl, live);
             attach_playlist_context_menu(&row, pl.id.clone(), pl.name.clone(), self.inner.clone());
             self.inner.list.append(&row);

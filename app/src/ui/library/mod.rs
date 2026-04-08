@@ -12,7 +12,7 @@ use gtk4::prelude::*;
 use gtk4::glib;
 
 use crate::i18n::t;
-use crate::library::{LibraryStore, MediaKind, metadata::probe_batch_async};
+use crate::library::{LibraryStore, MediaKind, MediaItem, fnv_hash, metadata::probe_batch_async};
 use crate::player::PlayerCommand;
 use crate::state::SharedState;
 
@@ -23,6 +23,7 @@ pub use grid::MediaGrid;
 
 pub struct LibraryView {
     page:              NavigationPage,
+    headerbar:         HeaderBar,
     sidebar:           LibrarySidebar,
     grid:              MediaGrid,
     store:             Rc<RefCell<LibraryStore>>,
@@ -30,6 +31,7 @@ pub struct LibraryView {
     now_playing_btn:   Button,
     pause_btn:         Button,
     now_playing_group: gtk::Box,
+    go_to_player_btn:  Button,
     on_play:           Rc<RefCell<Option<std::boxed::Box<dyn Fn(PathBuf)>>>>,
     on_add_folder:     Rc<RefCell<Option<std::boxed::Box<dyn Fn()>>>>,
     on_now_playing:    Rc<RefCell<Option<std::boxed::Box<dyn Fn()>>>>,
@@ -105,7 +107,15 @@ impl LibraryView {
             .build();
         add_btn.set_cursor_from_name(Some("pointer"));
 
+        // "Go to Player" button — always visible, navigates to the player view.
+        let go_to_player_btn = Button::builder()
+            .icon_name("media-playback-start-symbolic")
+            .tooltip_text(t("Go to Player"))
+            .build();
+        go_to_player_btn.set_cursor_from_name(Some("pointer"));
+
         headerbar.pack_start(&now_playing_group);
+        headerbar.pack_start(&go_to_player_btn);
         headerbar.pack_end(&scan_btn);
         headerbar.pack_end(&add_btn);
 
@@ -154,6 +164,9 @@ impl LibraryView {
                     grid_c.apply_recent_filter();
                 } else if matches!(filter.as_str(), "all" | "video" | "audio") {
                     grid_c.apply_filter(&filter);
+                } else {
+                    // Folder path — filter grid to items under that folder.
+                    grid_c.apply_folder_filter(PathBuf::from(&filter));
                 }
             });
         }
@@ -308,9 +321,19 @@ impl LibraryView {
             });
         }
 
+        // go_to_player_btn reuses the on_now_playing callback (same action).
+        {
+            let on_np_c = on_now_playing.clone();
+            go_to_player_btn.connect_clicked(move |_| {
+                if let Some(cb) = &*on_np_c.borrow() {
+                    cb();
+                }
+            });
+        }
+
         let view = Self {
-            page, sidebar, grid, store, state,
-            now_playing_btn, pause_btn, now_playing_group,
+            page, headerbar, sidebar, grid, store, state,
+            now_playing_btn, pause_btn, now_playing_group, go_to_player_btn,
             on_play, on_add_folder, on_now_playing,
         };
         view.reload_from_store();
@@ -331,9 +354,26 @@ impl LibraryView {
         *self.on_now_playing.borrow_mut() = Some(std::boxed::Box::new(f));
     }
 
+    /// Insert the shared "File" button into the library headerbar, always
+    /// placing it BEFORE the "Now Playing" group: [file_btn][now_playing_group].
+    pub fn header_insert_file_btn(&self, file_btn: &impl gtk::prelude::IsA<gtk::Widget>) {
+        // Remove now_playing_group so we can re-pack after file_btn.
+        self.headerbar.remove(&self.now_playing_group);
+        self.headerbar.pack_start(file_btn);
+        self.headerbar.pack_start(&self.now_playing_group);
+    }
+
+    /// Remove the shared "File" button from the library headerbar.
+    /// now_playing_group stays put — it never leaves this header.
+    pub fn header_remove_file_btn(&self, file_btn: &impl gtk::prelude::IsA<gtk::Widget>) {
+        self.headerbar.remove(file_btn);
+    }
+
     /// Show or hide the "Now Playing" / pause group.
     pub fn set_now_playing(&self, active: bool, title: &str) {
         self.now_playing_group.set_visible(active);
+        // Show the plain "Go to Player" button only when nothing is playing.
+        self.go_to_player_btn.set_visible(!active);
         if active {
             let display = {
                 let chars: Vec<char> = title.chars().collect();
@@ -428,6 +468,41 @@ impl LibraryView {
         self.sidebar.update_category_counts(counts.0, counts.1, counts.2, counts.3);
     }
 
+    /// Persist a URL playlist (from the "Open URL" dialog) to the library.
+    /// - `name = None`       → append to the "Recent URLs" singleton playlist
+    /// - `name = Some(name)` → create a new named playlist (deduplicates by path set)
+    /// Does not reset the current grid filter.
+    pub fn save_url_playlist(&self, name: Option<String>, urls: Vec<(String, String)>) {
+        let (playlists, new_items) = {
+            let mut s = self.store.borrow_mut();
+            let new_items = match name {
+                None => {
+                    let added = s.append_to_recent_urls(urls);
+                    // Nothing new → don't touch the UI (avoids disrupting sidebar selection).
+                    if added.is_empty() { return; }
+                    added
+                }
+                Some(n) => {
+                    let old_len = s.items.len();
+                    if s.add_url_playlist(n, urls).is_none() {
+                        return; // exact duplicate — nothing to do
+                    }
+                    s.items[old_len..].to_vec()
+                }
+            };
+            s.save();
+            let playlists = s.playlists.clone();
+            (playlists, new_items)
+        };
+        self.sidebar.update_playlists(playlists.clone());
+        self.grid.set_playlists(playlists);
+        if !new_items.is_empty() {
+            self.grid.append_stream_items(new_items.clone());
+            fetch_stream_thumbnails(new_items, &self.store, &self.grid);
+        }
+        self.refresh_sidebar_counts();
+    }
+
     pub fn store(&self) -> Rc<RefCell<LibraryStore>> {
         self.store.clone()
     }
@@ -435,18 +510,21 @@ impl LibraryView {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// (all, video, audio, recently_played) — computed entirely from the store.
+/// (all, video, audio, recently_played) — excludes stream items (URL playlists).
 fn category_counts(store: &LibraryStore, _grid: &MediaGrid) -> (usize, usize, usize, usize) {
-    let total  = store.items.len();
-    let video  = store.items.iter().filter(|i| i.kind == MediaKind::Video).count();
-    let audio  = store.items.iter().filter(|i| i.kind == MediaKind::Audio).count();
-    let recent = store.items.iter().filter(|i| i.last_played.is_some()).count();
+    let local: Vec<_> = store.items.iter().filter(|i| i.kind != MediaKind::Stream).collect();
+    let total  = local.len();
+    let video  = local.iter().filter(|i| i.kind == MediaKind::Video).count();
+    let audio  = local.iter().filter(|i| i.kind == MediaKind::Audio).count();
+    let recent = local.iter().filter(|i| i.last_played.is_some()).count();
     (total, video, audio, recent)
 }
 
 fn folder_counts(store: &LibraryStore) -> Vec<(PathBuf, usize)> {
     store.watched_folders.iter().map(|folder| {
-        let count = store.items.iter().filter(|i| i.path.starts_with(folder)).count();
+        let count = store.items.iter()
+            .filter(|i| i.kind != MediaKind::Stream && i.path.starts_with(folder))
+            .count();
         (folder.clone(), count)
     }).collect()
 }
@@ -493,12 +571,136 @@ fn show_new_playlist_dialog(
     dialog.present(parent);
 }
 
+// ── Stream thumbnail fetch (YouTube) ─────────────────────────────────────────
+
+/// Derive a YouTube thumbnail HTTPS URL from a video URL.
+/// Supports `youtube.com/watch?v=ID`, `youtu.be/ID`, `youtube.com/shorts/ID`.
+fn youtube_thumbnail_url(url: &str) -> Option<String> {
+    let extract_id = |start: &str| -> Option<String> {
+        let id: String = start.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if id.is_empty() { None } else { Some(id) }
+    };
+    if url.contains("youtube.com/watch") {
+        if let Some(pos) = url.find("v=") {
+            if let Some(id) = extract_id(&url[pos + 2..]) {
+                return Some(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"));
+            }
+        }
+    }
+    if let Some(pos) = url.find("youtu.be/") {
+        if let Some(id) = extract_id(&url[pos + 9..]) {
+            return Some(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"));
+        }
+    }
+    if let Some(pos) = url.find("youtube.com/shorts/") {
+        if let Some(id) = extract_id(&url[pos + 19..]) {
+            return Some(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"));
+        }
+    }
+    None
+}
+
+/// Download YouTube thumbnails in the background for newly added stream items.
+/// Uses the same mpsc + glib::timeout_add_local pattern as probe_batch_async.
+fn fetch_stream_thumbnails(
+    items: Vec<MediaItem>,
+    store: &Rc<RefCell<LibraryStore>>,
+    grid: &MediaGrid,
+) {
+    // Collect (item_path, thumbnail_url) pairs that have a known thumbnail source.
+    let work: Vec<(PathBuf, String)> = items.iter()
+        .filter_map(|i| {
+            if i.thumbnail_path.as_ref().map(|p| p.exists()).unwrap_or(false) {
+                return None; // already cached
+            }
+            let url = i.path.to_string_lossy().to_string();
+            youtube_thumbnail_url(&url).map(|t| (i.path.clone(), t))
+        })
+        .collect();
+
+    if work.is_empty() { return; }
+
+    let (tx, rx) = std::sync::mpsc::channel::<(PathBuf, PathBuf)>();
+
+    std::thread::spawn(move || {
+        let cache_dir = match dirs::cache_dir() {
+            Some(d) => d.join("aurora-media").join("thumbs"),
+            None    => return,
+        };
+        std::fs::create_dir_all(&cache_dir).ok();
+
+        for (item_path, thumb_url) in work {
+            let hash       = fnv_hash(item_path.to_string_lossy().as_bytes());
+            let thumb_path = cache_dir.join(format!("{hash:016x}_l.jpg"));
+            let raw_path   = cache_dir.join(format!("{hash:016x}_raw.jpg"));
+
+            if !thumb_path.exists() {
+                // 1. Download raw image with curl.
+                let downloaded = std::process::Command::new("curl")
+                    .args(["-s", "-L", "--max-time", "10", "-o"])
+                    .arg(&raw_path)
+                    .arg(&thumb_url)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+
+                if !downloaded || !raw_path.exists() { continue; }
+
+                // 2. Scale to exactly 200×120 with black padding — same as local thumbnails.
+                let scaled = std::process::Command::new("ffmpeg")
+                    .args([
+                        "-v", "quiet", "-y",
+                        "-i", &raw_path.to_string_lossy(),
+                        "-vf", "scale=200:120:force_original_aspect_ratio=decrease,\
+                                pad=200:120:(ow-iw)/2:(oh-ih)/2:color=black",
+                        "-q:v", "1",
+                    ])
+                    .arg(&thumb_path)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+
+                // Always clean up the raw file.
+                let _ = std::fs::remove_file(&raw_path);
+
+                if !scaled || !thumb_path.exists() { continue; }
+            }
+
+            if tx.send((item_path, thumb_path)).is_err() { break; }
+        }
+    });
+
+    let store_c = store.clone();
+    let grid_c  = grid.clone_ref();
+    glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+        loop {
+            match rx.try_recv() {
+                Ok((item_path, thumb_path)) => {
+                    {
+                        let mut s = store_c.borrow_mut();
+                        if let Some(i) = s.items.iter_mut().find(|i| i.path == item_path) {
+                            i.thumbnail_path = Some(thumb_path.clone());
+                        }
+                        s.save();
+                    }
+                    grid_c.update_item_thumbnail(&item_path, thumb_path);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty)        => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return glib::ControlFlow::Break,
+            }
+        }
+    });
+}
+
 // ── Background metadata probe ─────────────────────────────────────────────────
 
 fn probe_unprobed(store: &Rc<RefCell<LibraryStore>>, grid: &MediaGrid) {
     let paths: Vec<PathBuf> = {
         let s = store.borrow();
         s.items.iter()
+            .filter(|i| i.kind != MediaKind::Stream) // streams use fetch_stream_thumbnails
             .filter(|i| match &i.thumbnail_path {
                 None    => true,
                 Some(p) => !p.exists(),

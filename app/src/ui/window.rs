@@ -575,12 +575,24 @@ impl MediaWindow {
             })
         };
 
+        // Shared slot filled after library_view is created so the URL-playlist
+        // callback can reach the library without a forward-reference cycle.
+        let url_playlist_saver: Rc<RefCell<Option<Box<dyn Fn(Option<String>, Vec<(String, String)>)>>>> =
+            Rc::new(RefCell::new(None));
+
+        // Slot filled after main_stack is created — lets the on_open_file callback
+        // navigate to the player view after loading a file from the library.
+        let switch_to_player_slot: Rc<RefCell<Option<Box<dyn Fn()>>>> =
+            Rc::new(RefCell::new(None));
+
         let header = Rc::new({
             let state_file = state.clone();
             let playlist_file = playlist.clone();
             let state_url = state.clone();
             let playlist_url = playlist.clone();
             let state_sub = state.clone();
+            let saver_slot = url_playlist_saver.clone();
+            let switch_slot = switch_to_player_slot.clone();
             MediaHeaderBar::new(
                 state.clone(),
                 move |path: PathBuf| {
@@ -588,6 +600,7 @@ impl MediaWindow {
                         let items = parse_m3u(&path);
                         if !items.is_empty() {
                             load_playlist_items(items, &state_file, &playlist_file, true);
+                            if let Some(f) = &*switch_slot.borrow() { f(); }
                         }
                     } else {
                         let title = path.file_stem()
@@ -595,9 +608,14 @@ impl MediaWindow {
                             .unwrap_or("?")
                             .to_string();
                         load_playlist_items(vec![(title, path)], &state_file, &playlist_file, true);
+                        if let Some(f) = &*switch_slot.borrow() { f(); }
                     }
                 },
-                move |items: Vec<(String, String)>| {
+                move |playlist_name: Option<String>, items: Vec<(String, String)>| {
+                    // Save to library before consuming `items`.
+                    if let Some(saver) = &*saver_slot.borrow() {
+                        saver(playlist_name, items.clone());
+                    }
                     let items: Vec<(String, PathBuf)> = items
                         .into_iter()
                         .map(|(t, u)| (t, PathBuf::from(u)))
@@ -673,6 +691,14 @@ impl MediaWindow {
         // GLArea child, which invalidates the OpenGL render context and breaks the UI.
         let library_view = Rc::new(LibraryView::new(state.clone()));
 
+        // Fill the URL-playlist saver slot now that library_view exists.
+        {
+            let lib_c = library_view.clone();
+            *url_playlist_saver.borrow_mut() = Some(Box::new(move |name: Option<String>, urls| {
+                lib_c.save_url_playlist(name, urls);
+            }));
+        }
+
         let main_stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::SlideLeftRight)
             .transition_duration(250)
@@ -682,10 +708,18 @@ impl MediaWindow {
 
         main_stack.add_named(library_view.page(), Some("library"));
         main_stack.add_named(&toast_overlay, Some("player"));
-        // Start on library page.
-        main_stack.set_visible_child_name("library");
+        // Start on player page.
+        main_stack.set_visible_child_name("player");
 
-        window.set_content(Some(&main_stack));
+        // Fill the switch-to-player slot now that main_stack exists.
+        *switch_to_player_slot.borrow_mut() = Some(Box::new({
+            let stack_w = main_stack.downgrade();
+            move || {
+                if let Some(stack) = stack_w.upgrade() {
+                    stack.set_visible_child_name("player");
+                }
+            }
+        }));
 
         // ── "Back to Library" button in the player headerbar ─────────────
         let library_btn = gtk::Button::builder()
@@ -702,6 +736,14 @@ impl MediaWindow {
                 }
             });
         }
+
+        // File button lives permanently in the player headerbar — pack it first,
+        // then library_btn so the order is [File][Library] from the left.
+        header.widget().remove(&library_btn);
+        header.widget().pack_start(&header.file_btn);
+        header.widget().pack_start(&library_btn);
+
+        window.set_content(Some(&main_stack));
 
         // ── Library → Player navigation ───────────────────────────────────
         {

@@ -133,7 +133,7 @@ pub struct MediaHeaderBar {
     /// Clicking it opens Settings scrolled to the Video section.
     pub hdr_badge: Button,
     // ── Labels kept for live relabelling ─────────────────────────────────
-    file_btn: Button,
+    pub file_btn: Button,
     open_file_lbl: gtk::Label,
     open_url_lbl: gtk::Label,
     open_sub_lbl: gtk::Label,
@@ -157,7 +157,7 @@ impl MediaHeaderBar {
     pub fn new(
         _state: SharedState,
         on_open_file: impl Fn(PathBuf) + 'static,
-        on_url_playlist: impl Fn(Vec<(String, String)>) + 'static,
+        on_url_playlist: impl Fn(Option<String>, Vec<(String, String)>) + 'static,
         on_open_subtitle: impl Fn(PathBuf) + 'static,
         on_open_recent: impl Fn(PathBuf) + 'static,
         on_ui_mode_change: Rc<dyn Fn(&str)>,
@@ -347,7 +347,8 @@ impl MediaHeaderBar {
             });
         }
 
-        header.pack_start(&file_btn);
+        // file_btn is NOT packed here — window.rs moves it between headerbars
+        // depending on which view (library vs player) is currently visible.
 
         // ── Window title (centered, title + subtitle) ─────────────────────
         let window_title = adw::WindowTitle::builder()
@@ -1810,7 +1811,7 @@ fn validate_url(url: &str) -> Option<String> {
 
 fn show_url_playlist_dialog(
     parent: &gtk::Window,
-    on_load: Rc<impl Fn(Vec<(String, String)>) + 'static>,
+    on_load: Rc<impl Fn(Option<String>, Vec<(String, String)>) + 'static>,
 ) {
     let dialog = adw::Window::builder()
         .title(t("URL Playlist"))
@@ -1981,6 +1982,7 @@ fn show_url_playlist_dialog(
                 });
 
                 let urls = playlist.urls.clone();
+                let saved_name = playlist.name.clone();
                 let on_load_l = on_load_c.clone();
                 let dialog_l = dialog_c.clone();
                 load_btn.connect_clicked(move |btn| {
@@ -1993,10 +1995,11 @@ fn show_url_playlist_dialog(
                         let on_load_t = on_load_l.clone();
                         let dialog_t = dialog_l.clone();
                         let btn_w = btn.downgrade();
+                        let name_t = saved_name.clone();
                         glib::timeout_add_local(Duration::from_millis(100), move || {
                             match rx.try_recv() {
                                 Ok(expanded) => {
-                                    if !expanded.is_empty() { on_load_t(expanded); }
+                                    if !expanded.is_empty() { on_load_t(Some(name_t.clone()), expanded); }
                                     dialog_t.close();
                                     glib::ControlFlow::Break
                                 }
@@ -2009,7 +2012,7 @@ fn show_url_playlist_dialog(
                         });
                     } else {
                         let items = urls.iter().map(|u| (title_for_url(u), u.clone())).collect();
-                        on_load_l(items);
+                        on_load_l(Some(saved_name.clone()), items);
                         dialog_l.close();
                     }
                 });
@@ -2261,6 +2264,11 @@ fn show_url_playlist_dialog(
                 btn.set_sensitive(false);
                 btn.set_label("Loading…");
 
+                // Derive a playlist name from the first M3U URL's hostname.
+                let playlist_name: Option<String> = urls.iter()
+                    .find(|u| looks_like_m3u_url(u))
+                    .map(|u| title_for_url(u));
+
                 let (tx, rx) = std::sync::mpsc::channel::<Vec<(String, String)>>();
                 std::thread::spawn(move || { tx.send(expand_m3u_urls(urls)).ok(); });
 
@@ -2270,7 +2278,7 @@ fn show_url_playlist_dialog(
                 glib::timeout_add_local(Duration::from_millis(100), move || {
                     match rx.try_recv() {
                         Ok(expanded) => {
-                            if !expanded.is_empty() { on_load_c(expanded); }
+                            if !expanded.is_empty() { on_load_c(playlist_name.clone(), expanded); }
                             dialog_c2.close();
                             glib::ControlFlow::Break
                         }
@@ -2285,8 +2293,9 @@ fn show_url_playlist_dialog(
                     }
                 });
             } else {
+                // Direct URLs (not M3U) → go to "Recent URLs" in library (None).
                 let items = urls.into_iter().map(|u| (title_for_url(&u), u)).collect();
-                on_load(items);
+                on_load(None, items);
                 dialog_c.close();
             }
         });

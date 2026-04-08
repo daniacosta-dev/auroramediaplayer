@@ -122,7 +122,7 @@ fn extract_thumbnail(source: &Path, duration_secs: Option<f64>) -> Option<PathBu
     // Use a hash of the path as the filename to avoid collisions.
     // Suffix "_l" marks 200×120 thumbnails — bumped from "_m" (160×100) when
     // the card size increased.  Old _m files are simply ignored (different name).
-    let hash = simple_hash(source.to_string_lossy().as_bytes());
+    let hash = fnv_hash(source.to_string_lossy().as_bytes());
     let thumb_path = cache_dir.join(format!("{hash:016x}_l.jpg"));
 
     // Skip extraction if the thumbnail already exists.
@@ -161,7 +161,7 @@ fn extract_thumbnail(source: &Path, duration_secs: Option<f64>) -> Option<PathBu
 }
 
 /// FNV-1a 64-bit hash — no external dependency.
-fn simple_hash(data: &[u8]) -> u64 {
+pub fn fnv_hash(data: &[u8]) -> u64 {
     let mut hash: u64 = 14695981039346656037;
     for &byte in data {
         hash ^= byte as u64;

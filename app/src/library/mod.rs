@@ -4,3 +4,4 @@ pub mod metadata;
 
 pub use scanner::{scan_directory, MediaItem, MediaKind};
 pub use store::{LibraryStore, Playlist};
+pub use metadata::fnv_hash;
