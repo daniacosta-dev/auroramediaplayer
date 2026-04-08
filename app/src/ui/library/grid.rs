@@ -77,6 +77,11 @@ struct GridInner {
     page:                  NavigationPage,
     flow:                  FlowBox,
     view_stack:            gtk::Stack,
+    search_entry:          gtk::SearchEntry,
+    sort_btn:              gtk::MenuButton,
+    sort_labels:           Vec<Label>,
+    empty_library:         adw::StatusPage,
+    empty_results:         adw::StatusPage,
     filter_kind:           Rc<Cell<u8>>,
     filter_playlist:       Rc<RefCell<Option<HashSet<PathBuf>>>>,
     filter_folder:         Rc<RefCell<Option<PathBuf>>>,
@@ -214,17 +219,20 @@ impl MediaGrid {
             (SORT_DURATION,        "preferences-system-time-symbolic", t("Duration")),
         ];
 
+        let mut sort_labels: Vec<Label> = Vec::new();
         for &(order, icon, label) in sort_entries {
             let row = gtk::Box::builder()
                 .orientation(Orientation::Horizontal)
                 .spacing(8)
                 .build();
             row.append(&gtk::Image::from_icon_name(icon));
-            row.append(&Label::builder()
+            let lbl = Label::builder()
                 .label(label)
                 .halign(Align::Start)
                 .hexpand(true)
-                .build());
+                .build();
+            row.append(&lbl);
+            sort_labels.push(lbl);
             let btn = gtk::Button::builder()
                 .child(&row)
                 .css_classes(vec!["flat"])
@@ -300,6 +308,11 @@ impl MediaGrid {
             page,
             flow,
             view_stack,
+            search_entry,
+            sort_btn,
+            sort_labels,
+            empty_library,
+            empty_results,
             filter_kind,
             filter_playlist,
             filter_folder,
@@ -330,7 +343,7 @@ impl MediaGrid {
         });
 
         // Wire search entry.
-        search_entry.connect_search_changed({
+        inner.search_entry.connect_search_changed({
             let inner_c = inner.clone();
             move |entry| {
                 *inner_c.filter_search.borrow_mut() = entry.text().to_string();
@@ -343,6 +356,22 @@ impl MediaGrid {
     }
 
     pub fn page(&self) -> &NavigationPage { &self.inner.page }
+
+    pub fn relabel(&self) {
+        use crate::i18n::t;
+        self.inner.page.set_title(t("All Media"));
+        self.inner.search_entry.set_placeholder_text(Some(t("Search…")));
+        self.inner.sort_btn.set_tooltip_text(Some(t("Sort by")));
+        self.inner.empty_library.set_title(t("No media yet"));
+        self.inner.empty_library.set_description(Some(t("Add a folder using the button above to get started.")));
+        self.inner.empty_results.set_title(t("No results"));
+        self.inner.empty_results.set_description(Some(t("Try a different search or filter.")));
+        // Sort popover labels: Title, Date Added, Recently Played, Duration
+        let sort_keys = [t("Title"), t("Date Added"), t("Recently Played"), t("Duration")];
+        for (lbl, text) in self.inner.sort_labels.iter().zip(sort_keys.iter()) {
+            lbl.set_label(text);
+        }
+    }
 
     pub fn clone_ref(&self) -> Self { Self { inner: self.inner.clone() } }
 

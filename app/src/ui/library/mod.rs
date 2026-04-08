@@ -32,6 +32,8 @@ pub struct LibraryView {
     pause_btn:         Button,
     now_playing_group: gtk::Box,
     go_to_player_btn:  Button,
+    scan_btn:          Button,
+    add_btn:           Button,
     on_play:           Rc<RefCell<Option<std::boxed::Box<dyn Fn(PathBuf)>>>>,
     on_add_folder:     Rc<RefCell<Option<std::boxed::Box<dyn Fn()>>>>,
     on_now_playing:    Rc<RefCell<Option<std::boxed::Box<dyn Fn()>>>>,
@@ -334,6 +336,7 @@ impl LibraryView {
         let view = Self {
             page, headerbar, sidebar, grid, store, state,
             now_playing_btn, pause_btn, now_playing_group, go_to_player_btn,
+            scan_btn, add_btn,
             on_play, on_add_folder, on_now_playing,
         };
         view.reload_from_store();
@@ -341,6 +344,17 @@ impl LibraryView {
     }
 
     pub fn page(&self) -> &NavigationPage { &self.page }
+
+    pub fn relabel(&self) {
+        self.sidebar.relabel();
+        self.grid.relabel();
+        self.now_playing_btn.set_label(t("Now Playing"));
+        self.now_playing_btn.set_tooltip_text(Some(t("Back to player")));
+        self.pause_btn.set_tooltip_text(Some(t("Pause")));
+        self.go_to_player_btn.set_tooltip_text(Some(t("Go to Player")));
+        self.scan_btn.set_tooltip_text(Some(t("Scan folders")));
+        self.add_btn.set_tooltip_text(Some(t("Add folder")));
+    }
 
     pub fn connect_play<F: Fn(PathBuf) + 'static>(&self, f: F) {
         *self.on_play.borrow_mut() = Some(std::boxed::Box::new(f));

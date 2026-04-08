@@ -653,19 +653,7 @@ impl MediaWindow {
             )
         });
 
-        // Fill the slot now that all components exist.
-        *lang_change_slot.borrow_mut() = Some({
-            let header_c   = header.clone();
-            let controls_c = controls.clone();
-            let playlist_c = playlist.clone();
-            let video_c2   = video.clone();
-            Rc::new(move || {
-                header_c.relabel();
-                controls_c.relabel();
-                playlist_c.relabel();
-                video_c2.relabel();
-            })
-        });
+        // Slot filled below after library_view is created (needs all components).
 
         let push_recent = header.push_recent_fn.clone();
 
@@ -690,6 +678,22 @@ impl MediaWindow {
         // NavigationView was removed because popping a NavigationPage unrealizes the
         // GLArea child, which invalidates the OpenGL render context and breaks the UI.
         let library_view = Rc::new(LibraryView::new(state.clone()));
+
+        // Fill the language-change slot now that all components exist.
+        *lang_change_slot.borrow_mut() = Some({
+            let header_c   = header.clone();
+            let controls_c = controls.clone();
+            let playlist_c = playlist.clone();
+            let video_c2   = video.clone();
+            let library_c  = library_view.clone();
+            Rc::new(move || {
+                header_c.relabel();
+                controls_c.relabel();
+                playlist_c.relabel();
+                video_c2.relabel();
+                library_c.relabel();
+            })
+        });
 
         // Fill the URL-playlist saver slot now that library_view exists.
         {

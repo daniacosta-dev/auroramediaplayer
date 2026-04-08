@@ -21,11 +21,20 @@ pub struct LibrarySidebar {
 struct SidebarInner {
     page:             NavigationPage,
     list:             ListBox,
+    // Title labels for fixed category rows.
+    label_all:        Label,
+    label_video:      Label,
+    label_audio:      Label,
+    label_recent:     Label,
     // Count labels for fixed category rows.
     count_all:        Label,
     count_video:      Label,
     count_audio:      Label,
     count_recent:     Label,
+    // Section header labels.
+    label_folders:    Label,
+    label_playlists:  Label,
+    new_playlist_btn: gtk::Button,
     folder_rows:      RefCell<Vec<(PathBuf, ListBoxRow)>>,
     playlist_rows:    RefCell<Vec<(String, ListBoxRow)>>,
     playlist_header:  ListBoxRow,
@@ -44,10 +53,10 @@ impl LibrarySidebar {
             .build();
 
         // ── Fixed category rows ───────────────────────────────────────────
-        let (row_all,    count_all)    = make_nav_row_with_count("video-display-symbolic",   t("All Media"), "all");
-        let (row_video,  count_video)  = make_nav_row_with_count("video-x-generic-symbolic", t("Videos"),    "video");
-        let (row_audio,  count_audio)  = make_nav_row_with_count("audio-x-generic-symbolic", t("Music"),     "audio");
-        let (row_recent, count_recent) = make_nav_row_with_count("media-playback-start-symbolic", t("Recently Played"), "recent");
+        let (row_all,    label_all,    count_all)    = make_nav_row_with_count("video-display-symbolic",   t("All Media"), "all");
+        let (row_video,  label_video,  count_video)  = make_nav_row_with_count("video-x-generic-symbolic", t("Videos"),    "video");
+        let (row_audio,  label_audio,  count_audio)  = make_nav_row_with_count("audio-x-generic-symbolic", t("Music"),     "audio");
+        let (row_recent, label_recent, count_recent) = make_nav_row_with_count("media-playback-start-symbolic", t("Recently Played"), "recent");
 
         list.append(&row_all);
         list.append(&row_video);
@@ -55,18 +64,18 @@ impl LibrarySidebar {
         list.append(&row_recent);
 
         // ── "Folders" section header ──────────────────────────────────────
-        let folder_header = make_section_header(t("Folders"), None::<&gtk::Button>);
+        let (folder_header, label_folders) = make_section_header(t("Folders"), None::<&gtk::Button>);
         list.append(&folder_header);
 
         // ── "Playlists [+]" section header ───────────────────────────────
-        let add_btn = gtk::Button::builder()
+        let new_playlist_btn = gtk::Button::builder()
             .icon_name("list-add-symbolic")
             .css_classes(vec!["flat", "circular"])
             .tooltip_text(t("New playlist"))
             .build();
-        add_btn.set_size_request(22, 22);
-        add_btn.set_cursor_from_name(Some("pointer"));
-        let playlist_header = make_section_header(t("Playlists"), Some(&add_btn));
+        new_playlist_btn.set_size_request(22, 22);
+        new_playlist_btn.set_cursor_from_name(Some("pointer"));
+        let (playlist_header, label_playlists) = make_section_header(t("Playlists"), Some(&new_playlist_btn));
 
         let scroll = ScrolledWindow::builder()
             .vexpand(true)
@@ -85,10 +94,9 @@ impl LibrarySidebar {
         let inner = Rc::new(SidebarInner {
             page,
             list,
-            count_all,
-            count_video,
-            count_audio,
-            count_recent,
+            label_all, label_video, label_audio, label_recent,
+            count_all, count_video, count_audio, count_recent,
+            label_folders, label_playlists, new_playlist_btn,
             folder_rows:      RefCell::new(Vec::new()),
             playlist_rows:    RefCell::new(Vec::new()),
             playlist_header,
@@ -113,7 +121,7 @@ impl LibrarySidebar {
         });
 
         // Wire "+" button.
-        add_btn.connect_clicked({
+        inner.new_playlist_btn.connect_clicked({
             let inner_c = inner.clone();
             move |_| {
                 if let Some(cb) = &*inner_c.on_new_playlist.borrow() {
@@ -128,6 +136,18 @@ impl LibrarySidebar {
     pub fn page(&self) -> &NavigationPage { &self.inner.page }
 
     pub fn clone_ref(&self) -> Self { Self { inner: self.inner.clone() } }
+
+    pub fn relabel(&self) {
+        use crate::i18n::t;
+        self.inner.page.set_title(t("Library"));
+        self.inner.label_all.set_label(t("All Media"));
+        self.inner.label_video.set_label(t("Videos"));
+        self.inner.label_audio.set_label(t("Music"));
+        self.inner.label_recent.set_label(t("Recently Played"));
+        self.inner.label_folders.set_label(t("Folders"));
+        self.inner.label_playlists.set_label(t("Playlists"));
+        self.inner.new_playlist_btn.set_tooltip_text(Some(t("New playlist")));
+    }
 
     pub fn connect_filter_changed<F: Fn(String) + 'static>(&self, f: F) {
         *self.inner.on_filter.borrow_mut() = Some(Box::new(f));
@@ -174,7 +194,7 @@ impl LibrarySidebar {
                 .and_then(|n| n.to_str())
                 .unwrap_or("Folder")
                 .to_string();
-            let (row, count_lbl) =
+            let (row, _, count_lbl) =
                 make_nav_row_with_count("folder-symbolic", &label, &folder.to_string_lossy());
             set_count_label(&count_lbl, count);
             attach_folder_context_menu(&row, folder.clone(), self.inner.clone());
@@ -206,7 +226,7 @@ impl LibrarySidebar {
                 s.starts_with("http://") || s.starts_with("https://")
             }).unwrap_or(false);
             let icon = if is_url_playlist { "applications-internet-symbolic" } else { "view-list-symbolic" };
-            let (row, count_lbl) =
+            let (row, _, count_lbl) =
                 make_nav_row_with_count(icon, &pl.name, &widget_name);
             let live = if is_url_playlist {
                 pl.paths.len() // URL items don't live on disk
@@ -383,8 +403,8 @@ fn attach_right_click_gesture(row: &ListBoxRow, popover: &gtk::Popover) {
 // ── Row factories ─────────────────────────────────────────────────────────────
 
 /// Navigation row with a count badge on the right.
-/// Returns `(row, count_label)` — the count label starts hidden.
-fn make_nav_row_with_count(icon: &str, label: &str, name: &str) -> (ListBoxRow, Label) {
+/// Returns `(row, title_label, count_label)` — the count label starts hidden.
+fn make_nav_row_with_count(icon: &str, label: &str, name: &str) -> (ListBoxRow, Label, Label) {
     let row_box = gtk::Box::builder()
         .orientation(Orientation::Horizontal)
         .spacing(10)
@@ -416,11 +436,12 @@ fn make_nav_row_with_count(icon: &str, label: &str, name: &str) -> (ListBoxRow, 
     row.set_widget_name(name);
     row.set_cursor_from_name(Some("pointer"));
 
-    (row, count_lbl)
+    (row, lbl, count_lbl)
 }
 
 /// Non-selectable section header with an optional action button on the right.
-fn make_section_header(label: &str, btn: Option<&gtk::Button>) -> ListBoxRow {
+/// Returns `(row, title_label)`.
+fn make_section_header(label: &str, btn: Option<&gtk::Button>) -> (ListBoxRow, Label) {
     let row_box = gtk::Box::builder()
         .orientation(Orientation::Horizontal)
         .margin_start(12).margin_end(4)
@@ -439,9 +460,10 @@ fn make_section_header(label: &str, btn: Option<&gtk::Button>) -> ListBoxRow {
         row_box.append(b);
     }
 
-    ListBoxRow::builder()
+    let row = ListBoxRow::builder()
         .child(&row_box)
         .activatable(false)
         .selectable(false)
-        .build()
+        .build();
+    (row, lbl)
 }

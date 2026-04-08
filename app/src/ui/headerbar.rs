@@ -1503,29 +1503,39 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .title(t("Interface language"))
         .build();
 
-    let btn_en = gtk::ToggleButton::builder()
-        .label(t("English"))
-        .active(saved_lang == "en")
-        .valign(gtk::Align::Center)
-        .build();
-    let btn_es = gtk::ToggleButton::builder()
-        .label(t("Spanish"))
-        .active(saved_lang == "es")
-        .group(&btn_en)
-        .valign(gtk::Align::Center)
-        .build();
+    // (code, display label) — order matches the dropdown index
+    let lang_options: &[(&str, &str)] = &[
+        ("en", "English"),
+        ("de", "Deutsch"),
+        ("pt", "Português"),
+        ("es", "Español"),
+        ("fr", "Français"),
+        ("hi", "हिंदी"),
+        ("it", "Italiano"),
+        ("ru", "Русский"),
+        ("ja", "日本語"),
+        ("zh", "中文"),
+        ("id", "Indonesia"),
+        ("no", "Norsk"),
+        ("pl", "Polski"),
+        ("sv", "Svenska"),
+        ("tr", "Türkçe"),
+        ("ar", "العربية"),
+        ("ro", "Română"),
+        ("fi", "Suomi"),
+        ("af", "Afrikaans"),
+        ("ga", "Gaeilge"),
+    ];
+    let lang_labels: Vec<&str> = lang_options.iter().map(|(_, l)| *l).collect();
+    let lang_dropdown = gtk::DropDown::from_strings(&lang_labels);
+    lang_dropdown.set_valign(gtk::Align::Center);
+    lang_dropdown.set_margin_top(8);
+    lang_dropdown.set_margin_bottom(8);
 
-    let lang_btns = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .css_classes(["linked"])
-        .valign(gtk::Align::Center)
-        .margin_top(8)
-        .margin_bottom(8)
-        .build();
-    lang_btns.append(&btn_en);
-    lang_btns.append(&btn_es);
+    let active_idx = lang_options.iter().position(|(code, _)| *code == saved_lang).unwrap_or(0);
+    lang_dropdown.set_selected(active_idx as u32);
 
-    lang_row.add_suffix(&lang_btns);
+    lang_row.add_suffix(&lang_dropdown);
     lang_list.append(&lang_row);
 
     let content = gtk::Box::builder()
@@ -1677,23 +1687,22 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         }
     });
 
-    btn_en.connect_toggled({
+    lang_dropdown.connect_selected_notify({
         let lang_cb = on_language_change.clone();
-        move |btn| {
-            if btn.is_active() {
-                crate::i18n::set(crate::i18n::Lang::En);
-                let mut s = load_app_settings(); s.language = Some("en".into()); save_app_settings(&s);
-                lang_cb();
-            }
-        }
-    });
-    btn_es.connect_toggled({
-        let lang_cb = on_language_change.clone();
-        move |btn| {
-            if btn.is_active() {
-                crate::i18n::set(crate::i18n::Lang::Es);
-                let mut s = load_app_settings(); s.language = Some("es".into()); save_app_settings(&s);
-                lang_cb();
+        let on_ui_mode_c  = on_ui_mode_change.clone();
+        let on_lang_c     = on_language_change.clone();
+        let on_tm_c       = on_tone_mapping_change.clone();
+        let dialog_w      = dialog.downgrade();
+        let parent_w      = parent.downgrade();
+        move |dd| {
+            let (code, _) = lang_options[dd.selected() as usize];
+            crate::i18n::set(crate::i18n::Lang::from_code(code));
+            let mut s = load_app_settings(); s.language = Some(code.into()); save_app_settings(&s);
+            lang_cb();
+            // Reopen the settings dialog so its own labels reflect the new language.
+            if let Some(d) = dialog_w.upgrade() { d.close(); }
+            if let Some(p) = parent_w.upgrade() {
+                show_settings_dialog(&p, on_ui_mode_c.clone(), on_lang_c.clone(), on_tm_c.clone(), false);
             }
         }
     });
