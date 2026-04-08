@@ -14,6 +14,7 @@
     <file>icons/scalable/actions/document-open-symbolic.svg</file>
     <file>icons/scalable/actions/edit-clear-symbolic.svg</file>
     <file>icons/scalable/actions/edit-delete-symbolic.svg</file>
+    <file>icons/scalable/actions/go-home-symbolic.svg</file>
     <file>icons/scalable/actions/go-next-symbolic.svg</file>
     <file>icons/scalable/actions/help-about-symbolic.svg</file>
     <file>icons/scalable/actions/insert-link-symbolic.svg</file>
@@ -24,15 +25,23 @@
     <file>icons/scalable/actions/media-skip-backward-symbolic.svg</file>
     <file>icons/scalable/actions/media-skip-forward-symbolic.svg</file>
     <file>icons/scalable/actions/media-view-subtitles-symbolic.svg</file>
+    <file>icons/scalable/actions/folder-new-symbolic.svg</file>
+    <file>icons/scalable/actions/system-search-symbolic.svg</file>
     <file>icons/scalable/actions/view-fullscreen-symbolic.svg</file>
+    <file>icons/scalable/actions/view-refresh-symbolic.svg</file>
+    <file>icons/scalable/actions/view-sort-ascending-symbolic.svg</file>
     <file>icons/scalable/actions/view-list-symbolic.svg</file>
     <file>icons/scalable/actions/view-restore-symbolic.svg</file>
     <file>icons/scalable/categories/preferences-system-symbolic.svg</file>
+    <file>icons/scalable/categories/preferences-system-time-symbolic.svg</file>
     <file>icons/scalable/devices/audio-headphones-symbolic.svg</file>
+    <file>icons/scalable/devices/video-display-symbolic.svg</file>
     <file>icons/scalable/devices/camera-photo-symbolic.svg</file>
     <file>icons/scalable/devices/media-optical-symbolic.svg</file>
     <file>icons/scalable/mimetypes/audio-x-generic-symbolic.svg</file>
+    <file>icons/scalable/mimetypes/video-x-generic-symbolic.svg</file>
     <file>icons/scalable/mimetypes/text-x-generic-symbolic.svg</file>
+    <file>icons/scalable/places/folder-music-symbolic.svg</file>
     <file>icons/scalable/places/folder-videos-symbolic.svg</file>
     <file>icons/scalable/status/audio-volume-high-symbolic.svg</file>
     <file>icons/scalable/status/audio-volume-low-symbolic.svg</file>
