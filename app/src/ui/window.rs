@@ -1480,6 +1480,9 @@ impl MediaWindow {
         let last_recorded_path: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let library_view_200 = library_view.clone();
         let main_stack_200   = main_stack.downgrade();
+        // Inhibit system idle (screen blank + suspend) while media is actively playing.
+        // Cookie 0 = not inhibited; non-zero = active inhibit handle.
+        let inhibit_cookie: Rc<Cell<u32>> = Rc::new(Cell::new(0));
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let _tick_start = std::time::Instant::now();
@@ -2073,6 +2076,31 @@ impl MediaWindow {
                     can_go_next: can_next,
                     can_go_previous: can_prev,
                 });
+            }
+
+            // ── Inhibit system idle (screen blank / suspend) while playing ──
+            {
+                let should_inhibit = !idle && !paused;
+                let cookie = inhibit_cookie.get();
+                if should_inhibit && cookie == 0 {
+                    if let Some(win) = window_weak.upgrade() {
+                        if let Some(app) = win.application() {
+                            let new_cookie = app.inhibit(
+                                Some(&win),
+                                gtk::ApplicationInhibitFlags::IDLE,
+                                Some("Media is playing"),
+                            );
+                            inhibit_cookie.set(new_cookie);
+                        }
+                    }
+                } else if !should_inhibit && cookie != 0 {
+                    if let Some(win) = window_weak.upgrade() {
+                        if let Some(app) = win.application() {
+                            app.uninhibit(cookie);
+                            inhibit_cookie.set(0);
+                        }
+                    }
+                }
             }
 
             // ── Perf: warn if this tick took too long (blocks GTK main loop) ──

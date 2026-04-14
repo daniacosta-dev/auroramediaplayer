@@ -24,7 +24,7 @@
     <name>Dani Acosta</name>
   </developer>
 
-  <url type="homepage">https://daniacosta-dev.github.io/aurora-media-player/</url>
+  <url type="homepage">https://daniacosta-dev.github.io/auroramediaplayer/</url>
   <url type="bugtracker">https://github.com/daniacosta-dev/aurora-media-player/issues</url>
   <url type="vcs-browser">https://github.com/daniacosta-dev/aurora-media-player</url>
 
@@ -83,6 +83,15 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.0" date="2026-04-14">
+      <description>
+        <p>Improvements and bug fixes:</p>
+        <ul>
+          <li>Black bar issue in player caused by HDR support fixed</li>
+          <li>The player now prevents the system from blanking the screen or suspending while media is playing</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-04-08">
       <description>
         <p>New features:</p>
