@@ -293,23 +293,6 @@ label.playlist-duration {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
-/* ── HDR badge ──────────────────────────────────────────────────────────────── */
-.hdr-badge {
-    font-size: 0.65em;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    padding: 1px 6px;
-    min-height: 0;
-    border-radius: 4px;
-    background-color: alpha(@accent_color, 0.18);
-    color: @accent_color;
-    border: 1px solid alpha(@accent_color, 0.35);
-    margin: 0 4px;
-}
-
-.hdr-badge:hover {
-    background-color: alpha(@accent_color, 0.28);
-}
 
 /* ── Audio-only view ────────────────────────────────────────────────────────── */
 .audio-cover-icon {

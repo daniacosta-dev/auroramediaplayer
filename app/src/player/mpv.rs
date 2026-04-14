@@ -44,9 +44,6 @@ pub struct MpvSnapshot {
     pub thumbnail: Option<String>,
     pub path:      Option<String>, // current URL/path being played
     pub uploader:  Option<String>, // yt-dlp uploader / channel name
-    /// HDR format string when content is HDR, None when SDR.
-    /// Values: "HDR10" (BT.2020 + PQ), "HLG" (BT.2020 + HLG), "HDR" (generic BT.2020)
-    pub hdr_type:     Option<String>,
     /// Actual decoded video height in pixels (from video-params/h), None when no video.
     pub video_height: Option<i32>,
 }
@@ -154,19 +151,6 @@ impl MpvPoller {
                            .or_else(|| self.get_str("metadata/by-key/album_artist"))
                            .or_else(|| self.get_str("metadata/by-key/Album_Artist")),
             video_height: self.get_i64("video-params/h").map(|h| h as i32),
-            hdr_type:  {
-                let primaries = self.get_str("video-params/primaries").unwrap_or_default();
-                let gamma     = self.get_str("video-params/gamma").unwrap_or_default();
-                if primaries == "bt.2020" {
-                    if gamma == "pq"  { Some("HDR10".into()) }
-                    else if gamma == "hlg" { Some("HLG".into()) }
-                    else               { Some("HDR".into()) }
-                } else if gamma == "pq" || gamma == "hlg" {
-                    Some("HDR".into())
-                } else {
-                    None
-                }
-            },
         }
     }
 }
@@ -218,17 +202,6 @@ impl MpvPlayer {
         mpv.set_property("keep-open", "yes").ok();
         mpv.set_property("ytdl", true).ok();
 
-        // HDR: hint the display driver of the content's colorspace (Wayland/HDR displays)
-        // and enable automatic HDR peak detection for tone mapping.
-        mpv.set_property("target-colorspace-hint", true).ok();
-        mpv.set_property("hdr-compute-peak", "auto").ok();
-        // Only apply tone mapping when the content is actually HDR.
-        mpv.set_property("tone-mapping-mode", "auto").ok();
-        // Load user's preferred tone mapping algorithm (default: bt.2446a).
-        let tone_mapping = super::super::ui::headerbar::load_app_settings()
-            .tone_mapping
-            .unwrap_or_else(|| "bt.2446a".into());
-        mpv.set_property("tone-mapping", tone_mapping.as_str()).ok();
         // Point mpv to the bundled yt-dlp binary when running inside a sandbox
         // where PATH may not include the binary's location.
         if let Some(path) = ytdl_path() {
@@ -329,9 +302,6 @@ impl MpvPlayer {
                 } else {
                     self.mpv.set_property("vid", "no").ok();
                 }
-            }
-            PlayerCommand::SetToneMapping(mode) => {
-                self.mpv.set_property("tone-mapping", mode.as_str()).ok();
             }
             PlayerCommand::AddSubtitle(path) => {
                 let path_str = path.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?;

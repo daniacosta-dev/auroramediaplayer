@@ -564,16 +564,6 @@ impl MediaWindow {
             Rc::new(move || { if let Some(f) = &*slot.borrow() { f(); } })
         };
 
-        let on_tone_mapping_change: Rc<dyn Fn(&str)> = {
-            let state_tm = state.clone();
-            Rc::new(move |mode: &str| {
-                let mode = mode.to_string();
-                let s = state_tm.borrow();
-                if let Some(player) = &s.player {
-                    player.execute(PlayerCommand::SetToneMapping(mode)).ok();
-                }
-            })
-        };
 
         // Shared slot filled after library_view is created so the URL-playlist
         // callback can reach the library without a forward-reference cycle.
@@ -649,7 +639,6 @@ impl MediaWindow {
                 },
                 on_ui_mode_change,
                 on_language_change,
-                on_tone_mapping_change,
             )
         });
 
@@ -1463,7 +1452,6 @@ impl MediaWindow {
         let toast_overlay_c = toast_overlay.clone();
         let push_recent_c = push_recent.clone();
         let window_title_c = header.window_title.clone();
-        let hdr_badge_c = header.hdr_badge.clone();
         // Cooldown counter to avoid double-advancing when eof is briefly still true.
         let advance_cooldown = Rc::new(Cell::new(0u32));
         // Track previous idle state to detect unexpected stops (playback errors).
@@ -1497,7 +1485,7 @@ impl MediaWindow {
             let _tick_start = std::time::Instant::now();
             // Read mpv properties from the background-thread snapshot — no blocking IPC.
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, thumbnail, eof, buffering, seeking, snap_path, hdr_type,
+                 artist, album, thumbnail, eof, buffering, seeking, snap_path,
                  snap_height) = {
                 let snap = match snapshot_200.lock() {
                     Ok(g) => g.clone(),
@@ -1522,7 +1510,7 @@ impl MediaWindow {
                  artist, snap.album.unwrap_or_default(),
                  thumbnail,
                  snap.eof, snap.buffering, snap.seeking,
-                 snap.path, snap.hdr_type,
+                 snap.path,
                  snap.video_height)
             };
             // Read Rust-side state (no mpv IPC — always fast).
@@ -1793,17 +1781,6 @@ impl MediaWindow {
                     }
                 }
 
-                if let Some(ref hdr) = hdr_type {
-                    hdr_badge_c.set_label(hdr);
-                    hdr_badge_c.set_tooltip_text(Some(match hdr.as_str() {
-                        "HDR10" => "HDR10 — BT.2020 primaries, PQ transfer",
-                        "HLG"   => "HLG — Hybrid Log-Gamma (broadcast HDR)",
-                        _       => "HDR — High Dynamic Range content",
-                    }));
-                    hdr_badge_c.set_visible(has_video && !idle);
-                } else {
-                    hdr_badge_c.set_visible(false);
-                }
             }
 
             // ── Track change: record play + update now-playing card ────────

@@ -37,7 +37,6 @@ pub enum PlayerCommand {
     SetSubtitleTrack(i64),   // 0 means disable
     AddSubtitle(std::path::PathBuf),
     SetVideoEnabled(bool),
-    SetToneMapping(String),
     /// Change streaming quality: set ytdl-format and reload the URL from start_pos.
     SetQuality { format: String, url: String, start_pos: f64 },
 }

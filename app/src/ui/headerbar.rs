@@ -129,9 +129,6 @@ pub struct MediaHeaderBar {
     pub open_url_btn: Button,
     pub open_sub_btn: Button,
     pub settings_btn: Button,
-    /// Badge shown when the current content has HDR color metadata.
-    /// Clicking it opens Settings scrolled to the Video section.
-    pub hdr_badge: Button,
     // ── Labels kept for live relabelling ─────────────────────────────────
     pub file_btn: Button,
     open_file_lbl: gtk::Label,
@@ -162,7 +159,6 @@ impl MediaHeaderBar {
         on_open_recent: impl Fn(PathBuf) + 'static,
         on_ui_mode_change: Rc<dyn Fn(&str)>,
         on_language_change: Rc<dyn Fn()>,
-        on_tone_mapping_change: Rc<dyn Fn(&str)>,
     ) -> Self {
         let header = HeaderBar::new();
 
@@ -363,15 +359,6 @@ impl MediaHeaderBar {
             .build();
         header.pack_end(&playlist_btn);
 
-        // ── HDR badge ─────────────────────────────────────────────────────
-        let hdr_badge = Button::builder()
-            .label("HDR")
-            .visible(false)
-            .css_classes(["hdr-badge", "flat"])
-            .cursor(&gdk4::Cursor::from_name("pointer", None).unwrap())
-            .build();
-        header.pack_end(&hdr_badge);
-
         // ── Settings button ───────────────────────────────────────────────
         let settings_btn = Button::builder()
             .icon_name("preferences-system-symbolic")
@@ -415,7 +402,6 @@ impl MediaHeaderBar {
         settings_btn.connect_clicked({
             let cb = on_ui_mode_change.clone();
             let lang_cb = on_language_change.clone();
-            let tm_cb = on_tone_mapping_change.clone();
             move |btn| {
                 let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
                 // Toggle: if settings is already open, close it.
@@ -429,28 +415,7 @@ impl MediaHeaderBar {
                         }
                     }
                 }
-                show_settings_dialog(&parent, cb.clone(), lang_cb.clone(), tm_cb.clone(), false);
-            }
-        });
-
-        // ── Wire: HDR badge → open Settings at Video section ─────────────
-        hdr_badge.connect_clicked({
-            let cb = on_ui_mode_change.clone();
-            let lang_cb = on_language_change.clone();
-            let tm_cb = on_tone_mapping_change.clone();
-            move |btn| {
-                let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
-                for w in gtk::Window::list_toplevels() {
-                    if let Some(win) = w.downcast_ref::<gtk::Window>() {
-                        if win.widget_name() == "settings-dialog"
-                            && win.transient_for().as_ref() == Some(&parent)
-                        {
-                            win.close();
-                            return;
-                        }
-                    }
-                }
-                show_settings_dialog(&parent, cb.clone(), lang_cb.clone(), tm_cb.clone(), true);
+                show_settings_dialog(&parent, cb.clone(), lang_cb.clone());
             }
         });
 
@@ -673,7 +638,7 @@ impl MediaHeaderBar {
         );
 
         Self {
-            header, playlist_btn, push_recent_fn, window_title, hdr_badge,
+            header, playlist_btn, push_recent_fn, window_title,
             open_file_btn, open_url_btn, open_sub_btn, settings_btn,
             file_btn, open_file_lbl, open_url_lbl, open_sub_lbl,
             recent_row_lbl, screenshot_folder_lbl, report_issue_lbl, quit_lbl,
@@ -768,9 +733,6 @@ pub struct AppSettings {
     pub window_bg_color: Option<String>,
     /// Custom text/icon foreground colour as a CSS colour string, None = system
     pub text_color: Option<String>,
-    /// HDR tone mapping algorithm: "bt.2446a" | "reinhard" | "hable" | "clip"
-    /// None = use default ("bt.2446a")
-    pub tone_mapping: Option<String>,
 }
 
 fn default_volume() -> f64 { 100.0 }
@@ -941,7 +903,7 @@ fn show_report_dialog(parent: &gtk::Window) {
 
 // ── Settings dialog ───────────────────────────────────────────────────────────
 
-fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)>, on_language_change: Rc<dyn Fn()>, on_tone_mapping_change: Rc<dyn Fn(&str)>, scroll_to_video: bool) {
+fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)>, on_language_change: Rc<dyn Fn()>) {
     let dialog = adw::Window::builder()
         .title(t("Settings"))
         .transient_for(parent)
@@ -1299,107 +1261,6 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     app_list.append(&mk_sc(t("Toggle playlist"), "<Primary>p"));
     app_list.append(&mk_sc(t("Settings"),        "<Primary>comma"));
 
-    // ── Video / HDR section ───────────────────────────────────────────────
-    let video_section_lbl = gtk::Label::builder()
-        .label(t("Video"))
-        .halign(gtk::Align::Start)
-        .css_classes(["heading"])
-        .margin_top(24)
-        .margin_bottom(6)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-
-    let saved_tone_mapping = load_app_settings()
-        .tone_mapping
-        .unwrap_or_else(|| "bt.2446a".into());
-
-    let hdr_info_lbl = gtk::Label::builder()
-        .label(t("If your display supports HDR, the player will show HDR content natively with no processing. If your display does not support HDR, you can choose how HDR content is converted for display:"))
-        .halign(gtk::Align::Start)
-        .wrap(true)
-        .xalign(0.0)
-        .css_classes(["caption", "dim-label"])
-        .margin_start(16)
-        .margin_end(16)
-        .margin_bottom(8)
-        .build();
-
-    let tm_list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["boxed-list"])
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-
-    let tm_row = adw::ActionRow::builder()
-        .title(t("Tone mapping"))
-        .build();
-
-    let btn_bt2446a = gtk::ToggleButton::builder()
-        .label("BT.2446a")
-        .active(saved_tone_mapping == "bt.2446a")
-        .tooltip_text(t("ITU standard — recommended"))
-        .valign(gtk::Align::Center)
-        .build();
-    let btn_reinhard = gtk::ToggleButton::builder()
-        .label("Reinhard")
-        .active(saved_tone_mapping == "reinhard")
-        .group(&btn_bt2446a)
-        .tooltip_text(t("Softer, less contrast"))
-        .valign(gtk::Align::Center)
-        .build();
-    let btn_hable = gtk::ToggleButton::builder()
-        .label("Hable")
-        .active(saved_tone_mapping == "hable")
-        .group(&btn_bt2446a)
-        .tooltip_text(t("Cinematic S-curve"))
-        .valign(gtk::Align::Center)
-        .build();
-    let btn_clip = gtk::ToggleButton::builder()
-        .label("Clip")
-        .active(saved_tone_mapping == "clip")
-        .group(&btn_bt2446a)
-        .tooltip_text(t("No tone mapping — for HDR displays"))
-        .valign(gtk::Align::Center)
-        .build();
-
-    let tm_btns = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .css_classes(["linked"])
-        .valign(gtk::Align::Center)
-        .margin_top(8)
-        .margin_bottom(8)
-        .build();
-    tm_btns.append(&btn_bt2446a);
-    tm_btns.append(&btn_reinhard);
-    tm_btns.append(&btn_hable);
-    tm_btns.append(&btn_clip);
-
-    tm_row.add_suffix(&tm_btns);
-    tm_list.append(&tm_row);
-
-    // Wire tone mapping buttons
-    for (btn, mode) in [
-        (&btn_bt2446a, "bt.2446a"),
-        (&btn_reinhard, "reinhard"),
-        (&btn_hable, "hable"),
-        (&btn_clip, "clip"),
-    ] {
-        btn.connect_toggled({
-            let cb = on_tone_mapping_change.clone();
-            let mode = mode.to_string();
-            move |btn| {
-                if btn.is_active() {
-                    let mut s = load_app_settings();
-                    s.tone_mapping = Some(mode.clone());
-                    save_app_settings(&s);
-                    cb(&mode);
-                }
-            }
-        });
-    }
-
     // ── Footer ────────────────────────────────────────────────────────────
     let footer = gtk::Label::builder()
         .use_markup(true)
@@ -1549,9 +1410,6 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     content.append(&layout_list);
     content.append(&lang_section_lbl);
     content.append(&lang_list);
-    content.append(&video_section_lbl);
-    content.append(&hdr_info_lbl);
-    content.append(&tm_list);
     content.append(&shortcuts_lbl);
     content.append(&playback_lbl);
     content.append(&playback_list);
@@ -1691,7 +1549,6 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         let lang_cb = on_language_change.clone();
         let on_ui_mode_c  = on_ui_mode_change.clone();
         let on_lang_c     = on_language_change.clone();
-        let on_tm_c       = on_tone_mapping_change.clone();
         let dialog_w      = dialog.downgrade();
         let parent_w      = parent.downgrade();
         move |dd| {
@@ -1702,7 +1559,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
             // Reopen the settings dialog so its own labels reflect the new language.
             if let Some(d) = dialog_w.upgrade() { d.close(); }
             if let Some(p) = parent_w.upgrade() {
-                show_settings_dialog(&p, on_ui_mode_c.clone(), on_lang_c.clone(), on_tm_c.clone(), false);
+                show_settings_dialog(&p, on_ui_mode_c.clone(), on_lang_c.clone());
             }
         }
     });
@@ -1713,17 +1570,6 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     });
     dialog.present();
 
-    // Scroll to the Video section after the dialog is rendered.
-    if scroll_to_video {
-        let scroll_c = scroll.clone();
-        let tm_list_c = tm_list.clone();
-        let content_c = content.clone();
-        glib::idle_add_local_once(move || {
-            if let Some((_, y)) = tm_list_c.translate_coordinates(&content_c, 0.0, 0.0) {
-                scroll_c.vadjustment().set_value((y - 12.0).max(0.0));
-            }
-        });
-    }
 }
 
 // ── URL playlist dialog ───────────────────────────────────────────────────────
