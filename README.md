@@ -5,6 +5,16 @@ A modern media player for GNOME, built with Rust, GTK4, libadwaita, and mpv.
 ![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey)
 
+<a href="https://flathub.org/apps/io.github.daniacosta_dev.AuroraMediaPlayer"><img width="200" alt="Get it on Flathub" src="https://flathub.org/api/badge?locale=en"></a>
+
+![Aurora Media Player playing a video, with a thumbnail preview on the seek bar](data/screenshots/videoplayer1.png)
+
+## Screenshots
+
+| Dark theme | Floating controls | Music |
+| --- | --- | --- |
+| ![Video in the dark theme](data/screenshots/videoplayer2.png) | ![Video with the floating control bar](data/screenshots/videoplayer3.png) | ![Audio-only view while playing music](data/screenshots/videoplayer4.png) |
+
 ## Features
 
 **Playback**
@@ -28,11 +38,20 @@ A modern media player for GNOME, built with Rust, GTK4, libadwaita, and mpv.
 
 **Other**
 - Session restore — remembers the last played file and position
-- yt-dlp bundled in the Snap package (no manual installation needed)
+- yt-dlp bundled in the Flatpak and Snap packages (no manual installation needed)
 
 ## Installation
 
-### Snap (recommended)
+### Flathub (recommended)
+
+<a href="https://flathub.org/apps/io.github.daniacosta_dev.AuroraMediaPlayer"><img width="200" alt="Get it on Flathub" src="https://flathub.org/api/badge?locale=en"></a>
+
+```bash
+flatpak install flathub io.github.daniacosta_dev.AuroraMediaPlayer
+flatpak run io.github.daniacosta_dev.AuroraMediaPlayer
+```
+
+### Snap
 
 ```bash
 sudo snap install aurora-media-player

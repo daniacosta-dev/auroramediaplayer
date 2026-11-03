@@ -88,13 +88,23 @@ pub fn spawn() -> (MprisHandle, std::sync::mpsc::Receiver<MprisCommand>) {
 
 // ── D-Bus server ─────────────────────────────────────────────────────────────
 
+/// Well-known MPRIS bus name for this build.
+///
+/// The Flatpak sandbox only lets an app own the MPRIS name derived from its
+/// app ID, so any other name is rejected without an extra `--own-name` permission.
+fn bus_name(flatpak_id: Option<&str>) -> String {
+    let suffix = flatpak_id.unwrap_or("aurora-media-player");
+    format!("org.mpris.MediaPlayer2.{suffix}")
+}
+
 async fn run_server(
     state: Arc<Mutex<MprisState>>,
     mut changed_rx: tokio::sync::watch::Receiver<()>,
     cmd_tx: std::sync::mpsc::Sender<MprisCommand>,
 ) {
+    let name = bus_name(std::env::var("FLATPAK_ID").ok().as_deref());
     let conn = match zbus::connection::Builder::session()
-        .and_then(|b| b.name("org.mpris.MediaPlayer2.aurora-media-player"))
+        .and_then(|b| b.name(name.as_str()))
         .and_then(|b| b.serve_at("/org/mpris/MediaPlayer2", MediaPlayer2))
         .and_then(|b| {
             b.serve_at(
@@ -334,4 +344,22 @@ fn build_metadata(
     }
 
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bus_name;
+
+    #[test]
+    fn bus_name_outside_flatpak_keeps_default() {
+        assert_eq!(bus_name(None), "org.mpris.MediaPlayer2.aurora-media-player");
+    }
+
+    #[test]
+    fn bus_name_in_flatpak_uses_app_id() {
+        assert_eq!(
+            bus_name(Some("io.github.daniacosta_dev.AuroraMediaPlayer")),
+            "org.mpris.MediaPlayer2.io.github.daniacosta_dev.AuroraMediaPlayer"
+        );
+    }
 }
