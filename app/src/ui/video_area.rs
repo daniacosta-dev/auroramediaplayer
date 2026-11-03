@@ -279,15 +279,23 @@ impl VideoArea {
             });
         }
 
+        // ── resize ────────────────────────────────────────────────────────
+        // GLArea reports its buffer size here in device pixels. widget.width()
+        // is in logical pixels, which would shrink the video on HiDPI displays.
+        let buffer_size = Rc::new(Cell::new((0, 0)));
+        {
+            let buffer_size_c = buffer_size.clone();
+            gl_area.connect_resize(move |_, w, h| buffer_size_c.set((w, h)));
+        }
+
         // ── render ────────────────────────────────────────────────────────
         {
             let state_c = state.clone();
-            gl_area.connect_render(move |area, _gl_ctx| {
+            gl_area.connect_render(move |_area, _gl_ctx| {
                 let s = state_c.borrow();
                 if let Some(ctx) = s.render_ctx.as_ref() {
                     let fbo = current_fbo();
-                    let w = area.width();
-                    let h = area.height();
+                    let (w, h) = buffer_size.get();
                     if let Err(e) = ctx.render(fbo, w, h, true) {
                         log::error!("mpv render: {e}");
                     }
