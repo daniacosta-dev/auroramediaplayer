@@ -1,9 +1,10 @@
 //! Seek-bar thumbnail strip.
 //!
 //! When a local file is opened, `generate_async` spawns a background thread
-//! that runs ffmpeg to extract a set of JPEG frames distributed across the
-//! duration.  The results are written into a `SharedCache` (`Arc<Mutex<…>>`)
-//! that the UI reads on every hover-motion event.
+//! that runs ffmpeg once per thumbnail, seeking directly to each timestamp so
+//! the cost does not grow with the length of the video.  The results are
+//! written into a `SharedCache` (`Arc<Mutex<…>>`) that the UI reads on every
+//! hover-motion event.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -45,10 +46,11 @@ impl ThumbnailCache {
 ///
 /// If ffmpeg is not installed the thread exits silently and `cache` remains
 /// `None`.  The existing thumbnail directory is reused across runs to avoid
-/// redundant extraction for the same file.
+/// redundant extraction for the same file.  Extraction stops early once the
+/// caller drops its handle to `cache`, e.g. when another file is opened.
 pub fn generate_async(path: PathBuf, duration: f64, cache: SharedCache) {
     std::thread::spawn(move || {
-        if let Some(tc) = extract(&path, duration) {
+        if let Some(tc) = extract(&path, duration, &cache) {
             if let Ok(mut g) = cache.lock() {
                 *g = Some(tc);
             }
@@ -80,7 +82,7 @@ fn collect_frames(dir: &Path, duration: f64) -> ThumbnailCache {
     ThumbnailCache { frames }
 }
 
-fn extract(path: &Path, duration: f64) -> Option<ThumbnailCache> {
+fn extract(path: &Path, duration: f64, cache: &SharedCache) -> Option<ThumbnailCache> {
     if duration <= 0.0 {
         return None;
     }
@@ -96,36 +98,118 @@ fn extract(path: &Path, duration: f64) -> Option<ThumbnailCache> {
     std::fs::create_dir_all(&dir).ok()?;
 
     let interval = duration / FRAME_COUNT as f64;
-    let fps = format!("1/{:.3}", interval.max(0.1));
     let filter = format!(
-        "fps={fps},scale={THUMB_W}:{THUMB_H}:\
+        "scale={THUMB_W}:{THUMB_H}:\
          force_original_aspect_ratio=decrease,\
          pad={THUMB_W}:{THUMB_H}:(ow-iw)/2:(oh-ih)/2:black"
     );
-    let out_pattern = dir.join("%04d.jpg");
-    let out_str = out_pattern.to_str()?;
+    let input = path.to_str()?;
 
-    let ok = std::process::Command::new("ffmpeg")
-        .args([
-            "-i",
-            path.to_str()?,
-            "-vf",
-            &filter,
-            "-q:v",
-            "5",
-            "-y",
-            out_str,
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    for i in 1..=FRAME_COUNT {
+        // This thread holds the only remaining handle: nobody wants the result.
+        if Arc::strong_count(cache) == 1 {
+            return None;
+        }
 
-    if !ok {
-        return None;
+        let out = dir.join(format!("{i:04}.jpg"));
+        if out.exists() {
+            continue;
+        }
+
+        // Write to a temporary name so an interrupted run never leaves a
+        // truncated JPEG that a later run would accept as a finished frame.
+        let tmp = dir.join(format!("{i:04}.tmp.jpg"));
+        let timestamp = format!("{:.3}", (i as f64 - 0.5) * interval);
+
+        // `-ss` before `-i` seeks to the nearest keyframe instead of decoding
+        // from the start of the file.
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-threads",
+                "1",
+                "-noaccurate_seek",
+                "-ss",
+                &timestamp,
+                "-i",
+                input,
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+                "-an",
+                "-sn",
+                "-vf",
+                &filter,
+                "-q:v",
+                "5",
+                "-y",
+            ])
+            .arg(&tmp)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?; // ffmpeg is not installed.
+
+        // ffmpeg can succeed without writing anything if the seek lands past
+        // the last frame, so check for the file too.
+        if !status.success() || std::fs::rename(&tmp, &out).is_err() {
+            std::fs::remove_file(&tmp).ok();
+        }
     }
 
     let result = collect_frames(&dir, duration);
     if result.frames.is_empty() { None } else { Some(result) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Creates a short test video, or returns `None` if ffmpeg is unavailable.
+    fn test_video(name: &str) -> Option<PathBuf> {
+        let dir = std::env::temp_dir().join(format!("aurora-thumb-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok()?;
+        let path = dir.join(name);
+        std::process::Command::new("ffmpeg")
+            .args(["-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("testsrc2=size=320x180:rate=10:duration=20")
+            .arg(&path)
+            .status()
+            .ok()?
+            .success()
+            .then_some(path)
+    }
+
+    fn clean_up(video: &Path) {
+        std::fs::remove_dir_all(thumb_dir(video)).ok();
+        std::fs::remove_file(video).ok();
+    }
+
+    #[test]
+    fn extracts_every_frame() {
+        let Some(video) = test_video("all.mp4") else { return };
+        let cache: SharedCache = Arc::new(Mutex::new(None));
+        let _ui_handle = cache.clone();
+
+        let result = extract(&video, 20.0, &cache).expect("thumbnails");
+
+        assert_eq!(result.frames.len(), FRAME_COUNT);
+        let names: Vec<_> = std::fs::read_dir(thumb_dir(&video))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(names.iter().all(|n| !n.contains("tmp")), "{names:?}");
+        clean_up(&video);
+    }
+
+    #[test]
+    fn stops_when_the_caller_dropped_its_handle() {
+        let Some(video) = test_video("cancelled.mp4") else { return };
+        let cache: SharedCache = Arc::new(Mutex::new(None));
+
+        assert!(extract(&video, 20.0, &cache).is_none());
+        assert_eq!(collect_frames(&thumb_dir(&video), 20.0).frames.len(), 0);
+        clean_up(&video);
+    }
 }
