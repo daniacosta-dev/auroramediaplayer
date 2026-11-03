@@ -131,6 +131,9 @@ fn es(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Ajustes",
         "Interface language"          => "Idioma de la interfaz",
+        "Windows" => "Ventanas",
+        "Allow multiple windows" => "Permitir varias ventanas",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Cada archivo se abre en una ventana nueva en lugar de reemplazar el video actual. Se aplica al reiniciar la aplicación.",
         "If you like Aurora Media Player, consider"
                                       => "Si te gusta Aurora Media Player, considera",
         "⭐ starring it on GitHub"    => "⭐ darle una estrella en GitHub",
@@ -284,6 +287,9 @@ fn pt(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Configurações",
         "Interface language"          => "Idioma da interface",
+        "Windows" => "Janelas",
+        "Allow multiple windows" => "Permitir várias janelas",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Cada arquivo abre em uma nova janela em vez de substituir o vídeo atual. Entra em vigor ao reiniciar o aplicativo.",
         "If you like Aurora Media Player, consider"
                                       => "Se você gosta do Aurora Media Player, considere",
         "⭐ starring it on GitHub"    => "⭐ deixar uma estrela no GitHub",
@@ -442,6 +448,9 @@ fn fr(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Paramètres",
         "Interface language"          => "Langue de l'interface",
+        "Windows" => "Fenêtres",
+        "Allow multiple windows" => "Autoriser plusieurs fenêtres",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Chaque fichier s'ouvre dans une nouvelle fenêtre au lieu de remplacer la vidéo en cours. Prend effet au redémarrage de l'application.",
         "If you like Aurora Media Player, consider"
                                       => "Si vous aimez Aurora Media Player, pensez à",
         "⭐ starring it on GitHub"    => "⭐ lui donner une étoile sur GitHub",
@@ -600,6 +609,9 @@ fn de(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Einstellungen",
         "Interface language"          => "Sprache der Oberfläche",
+        "Windows" => "Fenster",
+        "Allow multiple windows" => "Mehrere Fenster erlauben",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Jede Datei wird in einem neuen Fenster geöffnet, statt das aktuelle Video zu ersetzen. Wird nach dem Neustart der App wirksam.",
         "If you like Aurora Media Player, consider"
                                       => "Wenn Ihnen Aurora Media Player gefällt, erwägen Sie,",
         "⭐ starring it on GitHub"    => "⭐ es auf GitHub mit einem Stern zu markieren",
@@ -758,6 +770,9 @@ fn ru(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Настройки",
         "Interface language"          => "Язык интерфейса",
+        "Windows" => "Окна",
+        "Allow multiple windows" => "Разрешить несколько окон",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Каждый файл открывается в новом окне, а не заменяет текущее видео. Вступает в силу после перезапуска приложения.",
         "If you like Aurora Media Player, consider"
                                       => "Если вам нравится Aurora Media Player, рассмотрите",
         "⭐ starring it on GitHub"    => "⭐ возможность поставить звезду на GitHub",
@@ -916,6 +931,9 @@ fn zh(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "设置",
         "Interface language"          => "界面语言",
+        "Windows" => "窗口",
+        "Allow multiple windows" => "允许多个窗口",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "每个文件都在新窗口中打开，而不是替换当前视频。重启应用后生效。",
         "If you like Aurora Media Player, consider"
                                       => "如果您喜欢 Aurora 媒体播放器，请考虑",
         "⭐ starring it on GitHub"    => "⭐ 在 GitHub 上为其点亮星标",
@@ -1074,6 +1092,9 @@ fn tr(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Ayarlar",
         "Interface language"          => "Arayüz dili",
+        "Windows" => "Pencereler",
+        "Allow multiple windows" => "Birden fazla pencereye izin ver",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Her dosya, geçerli videonun yerine geçmek yerine yeni bir pencerede açılır. Uygulama yeniden başlatıldığında etkinleşir.",
         "If you like Aurora Media Player, consider"
                                       => "Aurora Media Player'ı beğendiyseniz, düşünün",
         "⭐ starring it on GitHub"    => "⭐ GitHub'da yıldız vermeyi",
@@ -1232,6 +1253,9 @@ fn sv(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Inställningar",
         "Interface language"          => "Gränssnittsspråk",
+        "Windows" => "Fönster",
+        "Allow multiple windows" => "Tillåt flera fönster",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Varje fil öppnas i ett nytt fönster i stället för att ersätta den aktuella videon. Börjar gälla när appen startas om.",
         "If you like Aurora Media Player, consider"
                                       => "Om du gillar Aurora Media Player, överväg att",
         "⭐ starring it on GitHub"    => "⭐ ge det en stjärna på GitHub",
@@ -1390,6 +1414,9 @@ fn ja(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "設定",
         "Interface language"          => "表示言語",
+        "Windows" => "ウィンドウ",
+        "Allow multiple windows" => "複数のウィンドウを許可",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "現在の動画を置き換えず、ファイルごとに新しいウィンドウで開きます。アプリの再起動後に有効になります。",
         "If you like Aurora Media Player, consider"
                                       => "Aurora Media Player が気に入ったら、ぜひ",
         "⭐ starring it on GitHub"    => "⭐ GitHub でスターを付けてください",
@@ -1548,6 +1575,9 @@ fn hi(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "सेटिंग्स",
         "Interface language"          => "इंटरफ़ेस भाषा",
+        "Windows" => "विंडो",
+        "Allow multiple windows" => "एकाधिक विंडो की अनुमति दें",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "प्रत्येक फ़ाइल मौजूदा वीडियो को बदलने के बजाय नई विंडो में खुलती है। ऐप को पुनः आरंभ करने पर लागू होता है।",
         "If you like Aurora Media Player, consider"
                                       => "यदि आपको Aurora Media Player पसंद है, तो विचार करें",
         "⭐ starring it on GitHub"    => "⭐ GitHub पर इसे स्टार देने का",
@@ -1705,6 +1735,9 @@ fn it(key: &'static str) -> Option<&'static str> {
     Some(match key {
         "Settings"                    => "Impostazioni",
         "Interface language"          => "Lingua dell'interfaccia",
+        "Windows" => "Finestre",
+        "Allow multiple windows" => "Consenti più finestre",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Ogni file si apre in una nuova finestra invece di sostituire il video corrente. Ha effetto al riavvio dell'app.",
         "If you like Aurora Media Player, consider"
                                       => "Se ti piace Aurora Media Player, considera di",
         "⭐ starring it on GitHub"    => "⭐ dargli una stella su GitHub",
@@ -1853,6 +1886,9 @@ fn pl(key: &'static str) -> Option<&'static str> {
     Some(match key {
         "Settings"                    => "Ustawienia",
         "Interface language"          => "Język interfejsu",
+        "Windows" => "Okna",
+        "Allow multiple windows" => "Zezwalaj na wiele okien",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Każdy plik otwiera się w nowym oknie zamiast zastępować bieżące wideo. Zacznie działać po ponownym uruchomieniu aplikacji.",
         "If you like Aurora Media Player, consider"
                                       => "Jeśli podoba ci się Aurora Media Player, rozważ",
         "⭐ starring it on GitHub"    => "⭐ dodanie gwiazdki na GitHub",
@@ -2001,6 +2037,9 @@ fn id(key: &'static str) -> Option<&'static str> {
     Some(match key {
         "Settings"                    => "Pengaturan",
         "Interface language"          => "Bahasa antarmuka",
+        "Windows" => "Jendela",
+        "Allow multiple windows" => "Izinkan banyak jendela",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Setiap berkas dibuka di jendela baru alih-alih menggantikan video saat ini. Berlaku setelah aplikasi dimulai ulang.",
         "If you like Aurora Media Player, consider"
                                       => "Jika Anda menyukai Aurora Media Player, pertimbangkan",
         "⭐ starring it on GitHub"    => "⭐ memberi bintang di GitHub",
@@ -2149,6 +2188,9 @@ fn no(key: &'static str) -> Option<&'static str> {
     Some(match key {
         "Settings"                    => "Innstillinger",
         "Interface language"          => "Grensesnittspråk",
+        "Windows" => "Vinduer",
+        "Allow multiple windows" => "Tillat flere vinduer",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Hver fil åpnes i et nytt vindu i stedet for å erstatte den gjeldende videoen. Trer i kraft når appen startes på nytt.",
         "If you like Aurora Media Player, consider"
                                       => "Hvis du liker Aurora Media Player, vurder å",
         "⭐ starring it on GitHub"    => "⭐ gi det en stjerne på GitHub",
@@ -2298,6 +2340,9 @@ fn ar(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "الإعدادات",
         "Interface language"          => "لغة الواجهة",
+        "Windows" => "النوافذ",
+        "Allow multiple windows" => "السماح بعدة نوافذ",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "يُفتح كل ملف في نافذة جديدة بدلاً من استبدال الفيديو الحالي. يسري بعد إعادة تشغيل التطبيق.",
         "If you like Aurora Media Player, consider"
                                       => "إذا أعجبك Aurora Media Player، فكّر في",
         "⭐ starring it on GitHub"    => "⭐ إعطائه نجمة على GitHub",
@@ -2456,6 +2501,9 @@ fn ro(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Setări",
         "Interface language"          => "Limba interfeței",
+        "Windows" => "Ferestre",
+        "Allow multiple windows" => "Permite mai multe ferestre",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Fiecare fișier se deschide într-o fereastră nouă în loc să înlocuiască videoclipul curent. Se aplică după repornirea aplicației.",
         "If you like Aurora Media Player, consider"
                                       => "Dacă îți place Aurora Media Player, ia în considerare",
         "⭐ starring it on GitHub"    => "⭐ să-i dai o stea pe GitHub",
@@ -2614,6 +2662,9 @@ fn fi(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Asetukset",
         "Interface language"          => "Käyttöliittymän kieli",
+        "Windows" => "Ikkunat",
+        "Allow multiple windows" => "Salli useita ikkunoita",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Jokainen tiedosto avautuu uuteen ikkunaan nykyisen videon korvaamisen sijaan. Tulee voimaan, kun sovellus käynnistetään uudelleen.",
         "If you like Aurora Media Player, consider"
                                       => "Jos pidät Aurora Media Playeristä, harkitse",
         "⭐ starring it on GitHub"    => "⭐ tähden antamista GitHubissa",
@@ -2772,6 +2823,9 @@ fn af(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Instellings",
         "Interface language"          => "Koppelvlaktaal",
+        "Windows" => "Vensters",
+        "Allow multiple windows" => "Laat veelvuldige vensters toe",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Elke lêer maak in 'n nuwe venster oop in plaas daarvan om die huidige video te vervang. Tree in werking nadat die toepassing herbegin is.",
         "If you like Aurora Media Player, consider"
                                       => "As jy Aurora Media Player geniet, oorweeg dit om",
         "⭐ starring it on GitHub"    => "⭐ dit 'n ster te gee op GitHub",
@@ -2930,6 +2984,9 @@ fn ga(key: &'static str) -> Option<&'static str> {
         // ── Settings dialog ──────────────────────────────────────────────
         "Settings"                    => "Socruithe",
         "Interface language"          => "Teanga na comhéadain",
+        "Windows" => "Fuinneoga",
+        "Allow multiple windows" => "Ceadaigh fuinneoga iolracha",
+        "Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app." => "Osclaítear gach comhad i bhfuinneog nua in ionad an físeán reatha a athsholáthar. Tagann sé i bhfeidhm tar éis an aip a atosú.",
         "If you like Aurora Media Player, consider"
                                       => "Má taitníonn Aurora Media Player leat, smaoinigh ar",
         "⭐ starring it on GitHub"    => "⭐ réalta a thabhairt dó ar GitHub",

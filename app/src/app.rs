@@ -1,5 +1,8 @@
 use adw::prelude::*;
 use adw::Application;
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
 use gtk4 as gtk;
 use gtk4::prelude::StyleContextExt;
 use gio::ApplicationFlags;
@@ -68,6 +71,37 @@ fn apply_system_accent_color(display: &Display) {
     );
 }
 
+/// Snap confinement may block registering the application's D-Bus name, which
+/// a single-instance app needs in order to start, so Snap keeps separate windows.
+pub fn single_instance_supported() -> bool {
+    std::env::var_os("SNAP").is_none()
+}
+
+fn application_flags(allow_multiple_windows: bool, single_instance_supported: bool) -> ApplicationFlags {
+    if allow_multiple_windows || !single_instance_supported {
+        ApplicationFlags::HANDLES_OPEN | ApplicationFlags::NON_UNIQUE
+    } else {
+        ApplicationFlags::HANDLES_OPEN
+    }
+}
+
+/// Brings the existing window to the front, or creates one if there is none.
+fn present_window(app: &Application, current: &RefCell<Option<Rc<MediaWindow>>>) -> Rc<MediaWindow> {
+    let existing = current.borrow().as_ref().filter(|w| w.is_open()).cloned();
+    if let Some(window) = existing {
+        window.present();
+        return window;
+    }
+
+    let window = Rc::new(MediaWindow::new(app));
+    window.present();
+    // Apply after present() so our provider is installed last and wins
+    // over libadwaita's per-window colour providers.
+    crate::ui::headerbar::apply_custom_colors();
+    *current.borrow_mut() = Some(window.clone());
+    window
+}
+
 pub struct AuroraMediaApp;
 
 impl AuroraMediaApp {
@@ -76,7 +110,10 @@ impl AuroraMediaApp {
 
         let app = Application::builder()
             .application_id(APP_ID)
-            .flags(ApplicationFlags::HANDLES_OPEN | ApplicationFlags::NON_UNIQUE)
+            .flags(application_flags(
+                crate::ui::headerbar::load_app_settings().allow_multiple_windows,
+                single_instance_supported(),
+            ))
             .build();
 
         app.connect_startup(|_| {
@@ -96,24 +133,21 @@ impl AuroraMediaApp {
             crate::i18n::set(crate::i18n::Lang::from_code(&saved_lang));
         });
 
-        app.connect_activate(|app| {
-            let window = MediaWindow::new(app);
-            window.present();
-            // Apply after present() so our provider is installed last and wins
-            // over libadwaita's per-window colour providers.
-            crate::ui::headerbar::apply_custom_colors();
+        let current_window: Rc<RefCell<Option<Rc<MediaWindow>>>> = Rc::default();
+
+        app.connect_activate({
+            let current_window = current_window.clone();
+            move |app| {
+                present_window(app, &current_window);
+            }
         });
 
-        // Handle file opens from CLI or file manager
-        app.connect_open(|app, files, _hint| {
-            let window = MediaWindow::new(app);
-            window.present();
-            crate::ui::headerbar::apply_custom_colors();
-            if let Some(file) = files.first() {
-                if let Some(path) = file.path() {
-                    window.open_file(&path);
-                }
-            }
+        // Handle file opens from CLI or file manager, including those forwarded
+        // by later launches when running as a single instance.
+        app.connect_open(move |app, files, _hint| {
+            let window = present_window(app, &current_window);
+            let paths: Vec<PathBuf> = files.iter().filter_map(|f| f.path()).collect();
+            window.open_files(&paths);
         });
 
         let exit_code = app.run();
@@ -121,5 +155,32 @@ impl AuroraMediaApp {
             anyhow::bail!("Application exited with error");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_instance_is_the_default() {
+        assert!(!application_flags(false, true).contains(ApplicationFlags::NON_UNIQUE));
+    }
+
+    #[test]
+    fn the_setting_allows_multiple_windows() {
+        assert!(application_flags(true, true).contains(ApplicationFlags::NON_UNIQUE));
+    }
+
+    #[test]
+    fn snap_always_keeps_separate_windows() {
+        assert!(application_flags(false, false).contains(ApplicationFlags::NON_UNIQUE));
+    }
+
+    #[test]
+    fn opening_files_is_always_handled() {
+        for (multiple, supported) in [(false, true), (true, true), (false, false)] {
+            assert!(application_flags(multiple, supported).contains(ApplicationFlags::HANDLES_OPEN));
+        }
     }
 }

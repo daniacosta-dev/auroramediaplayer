@@ -27,6 +27,8 @@ use super::{
 pub struct MediaWindow {
     window: ApplicationWindow,
     state: SharedState,
+    playlist: Rc<PlaylistPanel>,
+    switch_to_player: Rc<RefCell<Option<Box<dyn Fn()>>>>,
 }
 
 // ── Session persistence ───────────────────────────────────────────────────────
@@ -2131,19 +2133,57 @@ impl MediaWindow {
             glib::ControlFlow::Continue
         });
 
-        Self { window, state }
+        Self {
+            window,
+            state,
+            playlist,
+            switch_to_player: switch_to_player_slot,
+        }
     }
 
     pub fn present(&self) {
         self.window.present();
     }
 
-    pub fn open_file(&self, path: &Path) {
-        log::info!("Opening from CLI: {:?}", path);
-        // Cancel any pending session seek — it belongs to the restored file, not this one.
-        self.state.borrow_mut().pending_seek = None;
-        if let Some(p) = self.state.borrow().player.as_ref() {
-            p.execute(PlayerCommand::Open(path.to_path_buf())).ok();
+    /// False once the window has been closed and removed from the application.
+    pub fn is_open(&self) -> bool {
+        self.window.application().is_some()
+    }
+
+    /// Replaces the current queue with `paths` and plays the first item.
+    pub fn open_files(&self, paths: &[PathBuf]) {
+        log::info!("Opening from CLI: {:?}", paths);
+        let items: Vec<(String, PathBuf)> = paths
+            .iter()
+            .flat_map(|path| {
+                if is_m3u(path) {
+                    parse_m3u(path)
+                } else {
+                    vec![(title_for_path(path), path.clone())]
+                }
+            })
+            .collect();
+        let Some(first) = items.first().map(|(_, path)| path.clone()) else { return };
+
+        load_playlist_items(items, &self.state, &self.playlist, false);
+        self.playlist.select_row(0);
+
+        {
+            let mut s = self.state.borrow_mut();
+            // Both belong to the restored session, not to these files.
+            s.pending_seek = None;
+            s.pending_open = None;
+            // With vo=libmpv, loadfile before the render context exists leaves
+            // mpv without video output, so defer it until the context is ready.
+            if s.render_ctx.is_none() {
+                s.pending_open = Some(first);
+            } else if let Some(p) = s.player.as_ref() {
+                p.execute(PlayerCommand::Open(first)).ok();
+            }
+        }
+
+        if let Some(switch) = &*self.switch_to_player.borrow() {
+            switch();
         }
     }
 }

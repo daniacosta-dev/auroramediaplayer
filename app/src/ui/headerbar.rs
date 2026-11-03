@@ -733,6 +733,9 @@ pub struct AppSettings {
     pub window_bg_color: Option<String>,
     /// Custom text/icon foreground colour as a CSS colour string, None = system
     pub text_color: Option<String>,
+    /// Open each file in its own window instead of reusing the current one.
+    #[serde(default)]
+    pub allow_multiple_windows: bool,
 }
 
 fn default_volume() -> f64 { 100.0 }
@@ -1399,6 +1402,36 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     lang_row.add_suffix(&lang_dropdown);
     lang_list.append(&lang_row);
 
+    // ── Windows section ──────────────────────────────────────────────────
+    let windows_lbl = gtk::Label::builder()
+        .label(t("Windows"))
+        .halign(gtk::Align::Start)
+        .css_classes(["heading"])
+        .margin_top(24)
+        .margin_bottom(6)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let windows_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let multiple_windows_row = adw::SwitchRow::builder()
+        .title(t("Allow multiple windows"))
+        .subtitle(t("Each file opens in a new window instead of replacing the current video. Takes effect after restarting the app."))
+        .active(load_app_settings().allow_multiple_windows)
+        .build();
+    multiple_windows_row.connect_active_notify(|row| {
+        let mut s = load_app_settings();
+        s.allow_multiple_windows = row.is_active();
+        save_app_settings(&s);
+    });
+    windows_list.append(&multiple_windows_row);
+
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .margin_bottom(32)
@@ -1410,6 +1443,10 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     content.append(&layout_list);
     content.append(&lang_section_lbl);
     content.append(&lang_list);
+    if crate::app::single_instance_supported() {
+        content.append(&windows_lbl);
+        content.append(&windows_list);
+    }
     content.append(&shortcuts_lbl);
     content.append(&playback_lbl);
     content.append(&playback_list);
