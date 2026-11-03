@@ -83,6 +83,20 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.4.0" date="2026-11-02">
+      <description>
+        <p>New features:</p>
+        <ul>
+          <li>Files now open in the existing window, replacing the current video</li>
+          <li>Added an option to allow multiple windows</li>
+        </ul>
+        <p>Bug fixes:</p>
+        <ul>
+          <li>Fixed video only filling a quarter of the window on displays with scaling enabled</li>
+          <li>Fixed seek bar thumbnail generation using excessive CPU on long videos</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-04-14">
       <description>
         <p>Improvements and bug fixes:</p>
